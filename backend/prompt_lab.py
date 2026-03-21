@@ -41,8 +41,13 @@ def ask_agent(
     
     messages = []
     if conversation_history:
-        messages.extend(conversation_history)
-    messages.append({"role": "user", "content": user_message})
+        # Flatten conversation history to a list of strings
+        for turn in conversation_history:
+            if isinstance(turn, dict) and "content" in turn:
+                messages.append(turn["content"])
+            elif isinstance(turn, str):
+                messages.append(turn)
+    messages.append(user_message)
     
     response = client.models.generate_content(
         model=MODEL,

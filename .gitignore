@@ -1,0 +1,22 @@
+# Node and frontend build artifacts
+node_modules/
+dist/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# macOS system files
+.DS_Store
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Environment
+.env
+
+# ChromaDB and LangSmith
+chroma_db/
+.langsmith/
