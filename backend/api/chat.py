@@ -1,4 +1,5 @@
 import os
+import json
 from flask import Blueprint, request, jsonify
 from backend.prompt_lab import ask_agent
 
@@ -16,6 +17,17 @@ AGENT_MAP = {
     "RECOVERY":  ("recovery_agent",     0.2),
     "GENERAL":   ("workout_planner",    0.4),
 }
+
+def try_parse_json(text):
+    try:
+        start = text.find('{')
+        end = text.rfind('}')
+        if start != -1 and end != -1:
+            json_str = text[start:end+1]
+            return json.loads(json_str)
+    except Exception:
+        pass
+    return None
 
 def format_agent_response(agent_name: str, structured: dict) -> str:
     """Convert structured JSON responses into clean, actionable markdown for the user."""
@@ -152,7 +164,12 @@ def send_message():
     if structured:
         display_response = format_agent_response(agent_name, structured)
     else:
-        display_response = raw
+        # Try to parse JSON from the raw response if the LLM ignored the prompt
+        parsed = try_parse_json(raw)
+        if parsed:
+            display_response = format_agent_response(agent_name, parsed)
+        else:
+            display_response = raw
 
     # 4. Update history (keep last 20 messages = 10 turns)
     history.append({"role": "user", "content": user_message})
