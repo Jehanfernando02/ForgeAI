@@ -54,6 +54,8 @@ def format_agent_response(agent_name: str, structured: dict) -> str:
         c = structured['calculation']
         tips = structured.get('practical_tips', [])
         tip_lines = "\n".join(f"- {t}" for t in tips)
+        meal_tips = structured.get('meal_timing_tips', [])
+        meal_tip_lines = "\n".join(f"- {t}" for t in meal_tips)
         return (
             f"## Your Nutrition Targets\n\n"
             f"| Metric | Value |\n|--------|-------|\n"
@@ -61,8 +63,9 @@ def format_agent_response(agent_name: str, structured: dict) -> str:
             f"| Protein | **{c.get('protein_g', '?')}g** |\n"
             f"| Carbs | **{c.get('carb_g', '?')}g** |\n"
             f"| Fats | **{c.get('fat_g', '?')}g** |\n\n"
-            f"**How we got there:** {c.get('calculation_shown', '')}\n\n"
             f"{structured.get('summary', '')}\n\n"
+            f"### How We Got Here\n{c.get('calculation_shown', '')}\n\n"
+            f"### Meal Timing Tips\n{meal_tip_lines}\n\n"
             f"### Practical Tips\n{tip_lines}"
         )
 
@@ -168,6 +171,7 @@ def send_message():
         parsed = try_parse_json(raw)
         if parsed:
             display_response = format_agent_response(agent_name, parsed)
+            structured = parsed  # Update structured so it's passed to frontend too
         else:
             display_response = raw
 
