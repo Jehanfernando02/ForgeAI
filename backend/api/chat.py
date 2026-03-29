@@ -19,13 +19,23 @@ AGENT_MAP = {
 }
 
 def try_parse_json(text):
+    """Try to extract and parse JSON from text, handling nested braces."""
     try:
         start = text.find('{')
-        end = text.rfind('}')
-        if start != -1 and end != -1:
-            json_str = text[start:end+1]
-            return json.loads(json_str)
-    except Exception:
+        if start == -1:
+            return None
+        
+        # Count braces to find the matching closing brace
+        brace_count = 0
+        for i in range(start, len(text)):
+            if text[i] == '{':
+                brace_count += 1
+            elif text[i] == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    json_str = text[start:i+1]
+                    return json.loads(json_str)
+    except (json.JSONDecodeError, ValueError):
         pass
     return None
 
@@ -170,9 +180,11 @@ def send_message():
         # Try to parse JSON from the raw response if the LLM ignored the prompt
         parsed = try_parse_json(raw)
         if parsed:
+            print(f"[DEBUG] Successfully parsed JSON from raw response for {agent_name}")
             display_response = format_agent_response(agent_name, parsed)
             structured = parsed  # Update structured so it's passed to frontend too
         else:
+            print(f"[DEBUG] No JSON found in response from {agent_name}. Raw response length: {len(raw)}")
             display_response = raw
 
     # 4. Update history (keep last 20 messages = 10 turns)
