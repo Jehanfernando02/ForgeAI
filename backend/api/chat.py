@@ -1,207 +1,328 @@
+"""
+ForgeAI Phase 2: Chat API
+=========================
+
+LangChain-powered chat endpoints with memory management and fact extraction.
+Replaces Phase 1 raw API calls with composable chains.
+"""
+
 import os
-import json
 from flask import Blueprint, request, jsonify
-from backend.prompt_lab import ask_agent
+
+from backend.chains import build_conversation_flow, build_fact_extraction_chain
+from backend.core import format_agent_response
+from backend.memory_manager import MemoryManager
 
 chat_bp = Blueprint('chat', __name__)
 
-# Phase 1: in-memory sessions (replaced by DB in Phase 4)
-sessions = {}
+# Initialize memory manager (singleton)
+memory = MemoryManager.get_instance()
 
-AGENT_MAP = {
-    "WORKOUT":   ("workout_planner",    0.3),
-    "NUTRITION": ("nutrition_agent",    0.1),
-    "PROGRESS":  ("progress_analyst",   0.2),
-    "EMOTIONAL": ("motivational_coach", 0.75),
-    "ASSESSMENT":("workout_planner",    0.3),
-    "RECOVERY":  ("recovery_agent",     0.2),
-    "GENERAL":   ("workout_planner",    0.4),
-}
+# Build chains at startup
+conversation_flow = build_conversation_flow()
+fact_extractor = build_fact_extraction_chain()
 
-def try_parse_json(text):
-    """Try to extract and parse JSON from text, handling nested braces."""
-    try:
-        start = text.find('{')
-        if start == -1:
-            return None
-        
-        # Count braces to find the matching closing brace
-        brace_count = 0
-        for i in range(start, len(text)):
-            if text[i] == '{':
-                brace_count += 1
-            elif text[i] == '}':
-                brace_count -= 1
-                if brace_count == 0:
-                    json_str = text[start:i+1]
-                    return json.loads(json_str)
-    except (json.JSONDecodeError, ValueError):
-        pass
-    return None
 
-def format_agent_response(agent_name: str, structured: dict) -> str:
-    """Convert structured JSON responses into clean, actionable markdown for the user."""
-    if agent_name == 'workout_planner' and 'workout' in structured:
-        w = structured['workout']
-        exercises = w.get('exercises', [])
-        lines = [
-            f"## {w.get('name', 'Your Workout')}",
-            f"**Focus:** {w.get('focus', '')}  ",
-            f"**Duration:** ~{w.get('estimated_duration_minutes', '?')} mins",
-            "",
-            "### Exercises",
-        ]
-        for ex in exercises:
-            lines.append(
-                f"- **{ex['name']}** — {ex['sets']} sets × {ex['reps']} reps · Rest {ex.get('rest_seconds', 60)}s · RPE {ex.get('rpe', '?')}"
-            )
-            lines.append(f"  *Cue: {ex.get('coaching_cue', '')}*")
-        lines.append(f"\n---\n💬 {structured.get('coaching_note', '')}")
-        lines.append(f"\n**Next session tip:** {structured.get('next_session_tip', '')}")
-        return "\n".join(lines)
-
-    if agent_name == 'nutrition_agent' and 'calculation' in structured:
-        c = structured['calculation']
-        tips = structured.get('practical_tips', [])
-        tip_lines = "\n".join(f"- {t}" for t in tips)
-        meal_tips = structured.get('meal_timing_tips', [])
-        meal_tip_lines = "\n".join(f"- {t}" for t in meal_tips)
-        return (
-            f"## Your Nutrition Targets\n\n"
-            f"| Metric | Value |\n|--------|-------|\n"
-            f"| Calories | **{c.get('goal_calories', '?')} kcal** |\n"
-            f"| Protein | **{c.get('protein_g', '?')}g** |\n"
-            f"| Carbs | **{c.get('carb_g', '?')}g** |\n"
-            f"| Fats | **{c.get('fat_g', '?')}g** |\n\n"
-            f"{structured.get('summary', '')}\n\n"
-            f"### How We Got Here\n{c.get('calculation_shown', '')}\n\n"
-            f"### Meal Timing Tips\n{meal_tip_lines}\n\n"
-            f"### Practical Tips\n{tip_lines}"
-        )
-
-    if agent_name == 'progress_analyst' and 'findings' in structured:
-        findings = structured.get('findings', [])
-        trend_emoji = {'improving': '📈', 'plateau': '➡️', 'declining': '📉'}
-        lines = [
-            f"## Progress Report\n",
-            structured.get('summary', ''),
-            "\n### Findings\n"
-        ]
-        for f in findings:
-            emoji = trend_emoji.get(f.get('trend', ''), '•')
-            lines.append(f"{emoji} **{f.get('metric', '')}** — {f.get('detail', '')}")
-            lines.append(f"  → {f.get('recommendation', '')}\n")
-        wins = structured.get('wins_to_celebrate', [])
-        if wins:
-            lines.append("### 🏆 Wins to Celebrate")
-            for w in wins:
-                lines.append(f"- {w}")
-        lines.append(f"\n**Priority action:** {structured.get('priority_action', '')}")
-        return "\n".join(lines)
-
-    if agent_name == 'recovery_agent' and 'recovery_status' in structured:
-        status_emoji = {'good': '✅', 'caution': '⚠️', 'rest_needed': '🛑'}
-        emoji = status_emoji.get(structured.get('recovery_status', ''), '•')
-        warnings = structured.get('warning_signs_detected', [])
-        warning_lines = "\n".join(f"- ⚠️ {w}" for w in warnings) if warnings else ""
-        return (
-            f"{emoji} **Recovery Status: {structured.get('recovery_status', '').replace('_', ' ').title()}**\n\n"
-            f"**Recommendation:** {structured.get('recommendation', '')}\n\n"
-            f"**Today's suggestion:** {structured.get('todays_suggestion', '')}\n\n"
-            f"{warning_lines}"
-        )
-
-    # Fallback — return summary or a friendly message
-    return structured.get('summary', '') or "Here's your result!"
-
+# ============================================================================
+# SESSION ENDPOINTS
+# ============================================================================
 
 @chat_bp.route('/api/chat/start', methods=['POST'])
 def start_session():
-    session_id = os.urandom(16).hex()
-    sessions[session_id] = {"history": [], "user_profile": {}}
+    """
+    Start a new conversation session.
+    
+    Returns:
+        {
+            "session_id": "...",
+            "welcome": "ForgeAI coaching session started."
+        }
+    """
+    # Create session in memory manager
+    session = memory.create_session()
+    
     return jsonify({
-        "session_id": session_id,
+        "session_id": session.session_id,
         "welcome": "ForgeAI coaching session started."
     })
 
 
+# ============================================================================
+# MESSAGING ENDPOINTS
+# ============================================================================
+
 @chat_bp.route('/api/chat/send', methods=['POST'])
 def send_message():
+    """
+    Send a message and get a response.
+    
+    Request:
+        {
+            "session_id": "...",
+            "message": "..."
+        }
+    
+    Response:
+        {
+            "response": "formatted markdown response",
+            "structured_response": {...},
+            "agent_used": "agent_name",
+            "routing": {...},
+            "routes": ["TAG1", "TAG2"],
+            "needs_clarification": false,
+            "session_stats": {...}
+        }
+    """
     data = request.json
     session_id = data.get('session_id')
     user_message = data.get('message', '').strip()
 
-    if not session_id or session_id not in sessions:
-        return jsonify({'error': 'Invalid session'}), 400
+    # Validate input
+    if not session_id or not memory.get_session(session_id):
+        return jsonify({'error': 'Invalid or expired session'}), 400
     if not user_message:
         return jsonify({'error': 'Empty message'}), 400
 
-    session = sessions[session_id]
-    history = session['history']
+    try:
+        # 1. Extract facts from user message
+        fact_result = fact_extractor(user_message)
+        facts = fact_result.get('structured_response', {}).get('facts', [])
+        if facts:
+            memory.add_facts(session_id, facts)
 
-    # 1. Supervisor routes the message
-    routing_result = ask_agent(
-        "supervisor", user_message,
-        temperature=0.1,
-        conversation_history=history
-    )
-    route_data = routing_result.get('structured_response') or {}
-    routes = route_data.get('route', ['GENERAL'])
-    needs_clarification = route_data.get('needs_clarification', False)
-    clarification = route_data.get('clarification_question')
+        # 2. Get conversation history
+        history = memory.get_history(session_id)
 
-    # 2. Handle clarification
-    if needs_clarification and clarification:
+        # 3. Run through conversation flow
+        flow_result = conversation_flow(user_message, history)
+
+        agent_used = flow_result.get('agent_used', 'unknown')
+        route_data = flow_result.get('routing', {})
+        raw_response = flow_result.get('raw_response', '')
+        structured = flow_result.get('structured_response', {})
+        needs_clarification = flow_result.get('needs_clarification', False)
+
+        # 4. Format response for display
+        if structured and not needs_clarification:
+            display_response = format_agent_response(agent_used, structured)
+        else:
+            display_response = raw_response
+
+        # 5. Update conversation history in memory
+        memory.add_message(session_id, 'user', user_message)
+        memory.add_message(session_id, 'model', raw_response)
+
+        # 6. Record routing decision
+        memory.record_routing(session_id, route_data, agent_used)
+
+        # 7. Trim history to keep memory efficient
+        memory.trim_history(session_id, keep_last_turns=10)
+
         return jsonify({
-            "response": clarification,
-            "agent_used": "supervisor",
+            "response": display_response,
+            "structured_response": structured,
+            "agent_used": agent_used,
             "routing": route_data,
-            "needs_clarification": True
+            "routes": route_data.get('route', []),
+            "needs_clarification": needs_clarification,
+            "session_stats": memory.get_session_stats(session_id),
         })
 
-    # 3. Route to primary specialist
-    primary_route = routes[0] if routes else 'GENERAL'
-    agent_name, temperature = AGENT_MAP.get(primary_route, ("workout_planner", 0.4))
+    except Exception as e:
+        print(f"[ERROR] Message processing failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': 'Failed to process message', 'detail': str(e)}), 500
 
-    specialist = ask_agent(
-        agent_name, user_message,
-        temperature=temperature,
-        conversation_history=history
-    )
 
-    # After getting specialist response, format it for display
-    raw = specialist['raw_response']
-    structured = specialist['structured_response']
+# ============================================================================
+# MEMORY & PROFILE ENDPOINTS
+# ============================================================================
 
-    # If the agent returned JSON, extract the human readable fields
-    if structured:
-        display_response = format_agent_response(agent_name, structured)
-    else:
-        # Try to parse JSON from the raw response if the LLM ignored the prompt
-        parsed = try_parse_json(raw)
-        if parsed:
-            print(f"[DEBUG] Successfully parsed JSON from raw response for {agent_name}")
-            display_response = format_agent_response(agent_name, parsed)
-            structured = parsed  # Update structured so it's passed to frontend too
-        else:
-            print(f"[DEBUG] No JSON found in response from {agent_name}. Raw response length: {len(raw)}")
-            display_response = raw
+@chat_bp.route('/api/chat/facts', methods=['GET'])
+def get_facts():
+    """
+    Get all extracted facts for a session.
+    
+    Query params:
+        session_id: Session ID
+    
+    Returns:
+        {
+            "session_id": "...",
+            "facts": [...],
+            "profile": {
+                "goals": {...},
+                "measurements": {...},
+                "preferences": {...}
+            }
+        }
+    """
+    session_id = request.args.get('session_id')
 
-    # 4. Update history (keep last 20 messages = 10 turns)
-    history.append({"role": "user", "content": user_message})
-    history.append({"role": "model", "content": specialist['raw_response']})
-    sessions[session_id]['history'] = history[-20:]
+    if not session_id or not memory.get_session(session_id):
+        return jsonify({'error': 'Invalid or expired session'}), 400
+
+    profile = memory.get_profile(session_id)
+    facts = memory.get_facts(session_id)
 
     return jsonify({
-        "response": display_response,
-        "structured_response": structured,
-        "agent_used": agent_name,
-        "routing": route_data,
-        "routes": routes,
-        "tokens_used": specialist['token_count']
+        "session_id": session_id,
+        "facts": facts,
+        "profile": {
+            "goals": profile.goals,
+            "measurements": profile.measurements,
+            "preferences": profile.preferences,
+        }
     })
 
 
+@chat_bp.route('/api/chat/profile', methods=['POST'])
+def update_profile():
+    """
+    Update user profile directly.
+    
+    Request:
+        {
+            "session_id": "...",
+            "goals": {...},
+            "measurements": {...},
+            "preferences": {...}
+        }
+    
+    Returns:
+        {
+            "session_id": "...",
+            "profile": {...}
+        }
+    """
+    data = request.json
+    session_id = data.get('session_id')
+
+    if not session_id or not memory.get_session(session_id):
+        return jsonify({'error': 'Invalid or expired session'}), 400
+
+    goals = data.get('goals')
+    measurements = data.get('measurements')
+    preferences = data.get('preferences')
+
+    memory.update_profile(session_id, goals, measurements, preferences)
+    profile = memory.get_profile(session_id)
+
+    return jsonify({
+        "session_id": session_id,
+        "profile": {
+            "goals": profile.goals,
+            "measurements": profile.measurements,
+            "preferences": profile.preferences,
+        }
+    })
+
+
+@chat_bp.route('/api/chat/history', methods=['GET'])
+def get_history():
+    """
+    Get conversation history for a session.
+    
+    Query params:
+        session_id: Session ID
+        limit: Max messages to return (default: all)
+    
+    Returns:
+        {
+            "session_id": "...",
+            "history": [...]
+        }
+    """
+    session_id = request.args.get('session_id')
+    limit = request.args.get('limit', type=int)
+
+    if not session_id or not memory.get_session(session_id):
+        return jsonify({'error': 'Invalid or expired session'}), 400
+
+    history = memory.get_history(session_id, limit)
+
+    return jsonify({
+        "session_id": session_id,
+        "history": history,
+    })
+
+
+@chat_bp.route('/api/chat/session-info', methods=['GET'])
+def session_info():
+    """
+    Get complete session information and statistics.
+    
+    Query params:
+        session_id: Session ID
+    
+    Returns:
+        {
+            "session_id": "...",
+            "stats": {...},
+            "profile": {...}
+        }
+    """
+    session_id = request.args.get('session_id')
+
+    if not session_id or not memory.get_session(session_id):
+        return jsonify({'error': 'Invalid or expired session'}), 400
+
+    session = memory.get_session(session_id)
+    stats = memory.get_session_stats(session_id)
+    profile = session.user_profile
+
+    return jsonify({
+        "session_id": session_id,
+        "stats": stats,
+        "profile": {
+            "goals": profile.goals,
+            "measurements": profile.measurements,
+            "preferences": profile.preferences,
+            "facts_extracted": len(profile.facts),
+        }
+    })
+
+
+# ============================================================================
+# HEALTH & DEBUG ENDPOINTS
+# ============================================================================
+
 @chat_bp.route('/api/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'version': 'phase-1'})
+    """Health check endpoint."""
+    return jsonify({
+        'status': 'ok',
+        'version': 'phase-2',
+        'active_sessions': len(memory.list_sessions()),
+    })
+
+
+@chat_bp.route('/api/debug/sessions', methods=['GET'])
+def debug_sessions():
+    """Debug endpoint: list all active sessions."""
+    if os.getenv('ENVIRONMENT') != 'development':
+        return jsonify({'error': 'Endpoint only available in development'}), 403
+
+    sessions_list = []
+    for session_id in memory.list_sessions():
+        stats = memory.get_session_stats(session_id)
+        sessions_list.append(stats)
+
+    return jsonify({
+        "total_sessions": len(sessions_list),
+        "sessions": sessions_list,
+    })
+
+
+@chat_bp.route('/api/debug/session/<session_id>', methods=['GET'])
+def debug_session(session_id):
+    """Debug endpoint: get full session details."""
+    if os.getenv('ENVIRONMENT') != 'development':
+        return jsonify({'error': 'Endpoint only available in development'}), 403
+
+    session_data = memory.export_session(session_id)
+    if not session_data:
+        return jsonify({'error': 'Session not found'}), 404
+
+    return jsonify(session_data)
