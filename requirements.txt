@@ -31,7 +31,8 @@ typing_extensions==4.15.0
 urllib3==2.6.3
 websockets>=13.0,<15.0
 Werkzeug==3.1.6
-# Phase 2-3: LangChain & Database
+
+# Phase 3: LangChain & Database
 langchain>=0.1.0,<0.2.0
 langchain-core>=0.1.0,<0.2.0
 langchain-google-genai>=0.0.1
