@@ -1,25 +1,20 @@
 """
-ForgeAI Phase 2: LangChain Chains
-==================================
+ForgeAI Phase 3: LangChain Chains with Tool Support
+======================================================
 
-Composable chains for routing, specialist agents, and structured data extraction.
-Each chain is built to be testable and reusable across different contexts.
+Composable chains for routing, specialist agents with tool calling,
+and structured data extraction. Each chain can invoke tools during reasoning.
 """
 
-import json
-from typing import Any, Dict, List
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import JsonOutputParser
-from backend.core import (
-    get_llm,
-    build_system_message,
-    build_message_chain,
-    extract_json_from_response,
-)
+from typing import Any, Dict, List, Optional
+from langchain.agents import create_react_agent, AgentExecutor
+from langchain_core.prompts import PromptTemplate
+from backend.core import get_llm, build_system_message, build_message_chain, extract_json_from_response
+from backend.tools.registry import AGENT_TOOLS
 
 
 # ============================================================================
-# SUPERVISOR ROUTING CHAIN
+# SUPERVISOR ROUTING CHAIN (No tools)
 # ============================================================================
 
 def build_supervisor_chain():
@@ -29,17 +24,8 @@ def build_supervisor_chain():
     Returns:
         A chain that takes (user_message, conversation_history) 
         and returns structured routing decisions as JSON
-    
-    Output format:
-    {
-        "route": ["TAG1", "TAG2"],
-        "reasoning": "...",
-        "urgency": "normal|high",
-        "needs_clarification": false,
-        "clarification_question": null
-    }
     """
-    llm = get_llm(temperature=0.1)  # Low temperature for consistency
+    llm = get_llm(temperature=0.1)
     
     def supervisor_chain(user_message: str, conversation_history: list = None) -> Dict[str, Any]:
         """Execute supervisor routing."""
@@ -74,23 +60,13 @@ def build_supervisor_chain():
 
 
 # ============================================================================
-# SPECIALIST AGENT CHAINS (GENERIC FACTORY)
+# BASIC AGENT CHAIN (No tools, Phase 2 compatibility)
 # ============================================================================
 
 def build_agent_chain(agent_name: str, temperature: float = 0.3):
     """
-    Build a specialist agent chain.
-    
-    Generic factory that works for any specialist agent (workout_planner,
-    nutrition_agent, progress_analyst, motivational_coach, recovery_agent).
-    
-    Args:
-        agent_name: Name of the specialist agent (must match prompt file)
-        temperature: LLM temperature for this agent
-    
-    Returns:
-        A chain that takes (user_message, conversation_history)
-        and returns the agent's response with structured data extraction
+    Build a basic specialist agent chain (no tools).
+    Used for fallback if tool execution fails.
     """
     llm = get_llm(temperature=temperature)
     
@@ -119,181 +95,122 @@ def build_agent_chain(agent_name: str, temperature: float = 0.3):
 
 
 # ============================================================================
-# WORKOUT LOGGING CHAIN (STRUCTURED DATA EXTRACTION)
+# TOOL-ENABLED AGENT CHAIN (Phase 3)
 # ============================================================================
 
-def build_workout_log_chain():
+def build_tool_agent_chain(agent_name: str, temperature: float = 0.5, user_id: str = None):
     """
-    Build a chain specifically for parsing user workout logs.
-    
+    Build an agent chain that can call tools during reasoning.
+
+    This uses LangChain's create_react_agent to give the agent
+    a ReAct reasoning loop — it can think, call a tool, observe
+    the result, think again, and repeat until it has an answer.
+
+    Args:
+        agent_name: which specialist agent to build
+        temperature: controls response creativity
+        user_id: injected into tool calls automatically
+
     Returns:
-        A chain that takes a workout description and returns:
-    {
-        "exercise": "name",
-        "sets": 3,
-        "reps": 10,
-        "weight_kg": 50,
-        "difficulty_rating": 7,
-        "notes": "felt strong"
-    }
+        a runnable that accepts {"message": str, "history": list}
     """
-    llm = get_llm(temperature=0.0)  # Deterministic for data extraction
     
-    system_prompt = """You are a workout logging assistant. Parse the user's workout description and extract:
-- exercise name
-- sets completed
-- reps per set
-- weight used (in kg)
-- difficulty rating (1-10)
-- any notes
+    llm        = get_llm(temperature=temperature)
+    tools      = AGENT_TOOLS.get(agent_name, [])
+    sys_prompt = build_system_message(agent_name)
 
-Return ONLY valid JSON, no other text. If any field is missing, use null.
+    # ReAct prompt template — tells the agent how to reason and use tools
+    react_template = """{system_prompt}
 
-{
-    "exercise": "...",
-    "sets": null,
-    "reps": null,
-    "weight_kg": null,
-    "difficulty_rating": null,
-    "notes": "..."
-}"""
-    
-    def workout_log_chain(workout_description: str) -> Dict[str, Any]:
-        """Parse a workout log entry."""
-        messages = build_message_chain(system_prompt, [], workout_description)
-        response = llm.invoke(messages)
-        response_text = response.content
-        
-        structured = extract_json_from_response(response_text)
-        if not structured:
-            structured = {}
-        
-        return {
-            "raw_response": response_text,
-            "structured_response": structured,
-        }
-    
-    return workout_log_chain
+You have access to these tools:
+{{tools}}
 
+Use this EXACT format when using tools:
+Thought: [your reasoning about what to do next]
+Action: [tool name exactly as listed]
+Action Input: [tool parameters as JSON]
+Observation: [tool result — filled in automatically]
+... (repeat Thought/Action/Observation as needed)
+Thought: I now have enough information to respond
+Final Answer: [your complete response to the user in markdown]
 
-# ============================================================================
-# NUTRITION LOGGING CHAIN (STRUCTURED DATA EXTRACTION)
-# ============================================================================
+If you don't need tools, respond directly:
+Thought: I can answer this directly
+Final Answer: [your response]
 
-def build_nutrition_log_chain():
-    """
-    Build a chain specifically for parsing user meal logs.
-    
-    Returns:
-        A chain that takes a meal description and returns:
-    {
-        "food_items": ["item1", "item2"],
-        "estimated_calories": 500,
-        "protein_g": 25,
-        "carbs_g": 60,
-        "fats_g": 15,
-        "time_of_day": "breakfast|lunch|dinner|snack",
-        "notes": "..."
-    }
-    """
-    llm = get_llm(temperature=0.0)  # Deterministic for data extraction
-    
-    system_prompt = """You are a nutrition logging assistant. Parse the user's meal description and estimate:
-- food items consumed
-- total estimated calories
-- protein grams
-- carbohydrate grams
-- fat grams
-- time of day (breakfast, lunch, dinner, snack)
-- any notes
+User ID for tool calls: {user_id}
 
-Return ONLY valid JSON, no other text. Use reasonable estimates if exact values are unknown.
+Conversation history:
+{{chat_history}}
 
-{
-    "food_items": [...],
-    "estimated_calories": null,
-    "protein_g": null,
-    "carbs_g": null,
-    "fats_g": null,
-    "time_of_day": "...",
-    "notes": "..."
-}"""
-    
-    def nutrition_log_chain(meal_description: str) -> Dict[str, Any]:
-        """Parse a nutrition log entry."""
-        messages = build_message_chain(system_prompt, [], meal_description)
-        response = llm.invoke(messages)
-        response_text = response.content
-        
-        structured = extract_json_from_response(response_text)
-        if not structured:
-            structured = {}
-        
-        return {
-            "raw_response": response_text,
-            "structured_response": structured,
-        }
-    
-    return nutrition_log_chain
+Current question: {{input}}
+{{agent_scratchpad}}"""
 
+    if not tools:
+        # If no tools available, fall back to basic chain
+        return build_agent_chain(agent_name, temperature)
 
-# ============================================================================
-# FACT EXTRACTION CHAIN
-# ============================================================================
+    try:
+        prompt = PromptTemplate(
+            template=react_template.format(
+                system_prompt=sys_prompt,
+                user_id=user_id or "unknown"
+            ),
+            input_variables=["input", "tools", "tool_names",
+                             "agent_scratchpad", "chat_history"]
+        )
 
-def build_fact_extraction_chain():
-    """
-    Build a chain to extract user facts for memory storage.
-    
-    Takes any message and extracts key facts about the user
-    (goals, body measurements, training preferences, etc.)
-    
-    Returns:
-        A chain that returns:
-    {
-        "facts": ["fact1", "fact2", ...],
-        "goal_updates": {"field": "value"},
-        "measurements": {"weight_kg": 80}
-    }
-    """
-    llm = get_llm(temperature=0.0)
-    
-    system_prompt = """Extract any user facts from this message. Look for:
-- Body measurements (weight, height, body fat %)
-- Fitness goals
-- Exercise preferences
-- Dietary preferences
-- Injury history
-- Training experience level
-- Schedule/availability
+        agent = create_react_agent(llm=llm, tools=tools, prompt=prompt)
 
-Return JSON with:
-- facts: list of extracted facts as strings
-- goal_updates: dict of goal fields that changed
-- measurements: dict of any body metrics
+        executor = AgentExecutor(
+            agent=agent,
+            tools=tools,
+            verbose=False,
+            max_iterations=5,
+            handle_parsing_errors=True,
+            return_intermediate_steps=True
+        )
 
-{
-    "facts": [],
-    "goal_updates": {},
-    "measurements": {}
-}"""
-    
-    def fact_extraction_chain(message: str) -> Dict[str, Any]:
-        """Extract facts from a message."""
-        messages = build_message_chain(system_prompt, [], message)
-        response = llm.invoke(messages)
-        response_text = response.content
-        
-        structured = extract_json_from_response(response_text)
-        if not structured:
-            structured = {"facts": [], "goal_updates": {}, "measurements": {}}
-        
-        return {
-            "raw_response": response_text,
-            "structured_response": structured,
-        }
-    
-    return fact_extraction_chain
+        def run(inputs: dict) -> dict:
+            history      = inputs.get("history", [])
+            chat_history = "\n".join(
+                f"{'User' if t['role']=='user' else 'Assistant'}: {t['content']}"
+                for t in history[-6:]  # Last 3 turns for context
+            )
+            try:
+                result = executor.invoke({
+                    "input": inputs["message"],
+                    "chat_history": chat_history
+                })
+                raw      = result.get("output", "")
+                steps    = result.get("intermediate_steps", [])
+                tools_used = [
+                    step[0].tool for step in steps
+                    if hasattr(step[0], 'tool')
+                ] if steps else []
+
+                return {
+                    "agent": agent_name,
+                    "raw_response": raw,
+                    "structured_response": extract_json_from_response(raw),
+                    "tools_used": tools_used,
+                    "steps": len(steps)
+                }
+            except Exception as e:
+                print(f"[Tool Agent Error] {agent_name}: {str(e)}")
+                return {
+                    "agent": agent_name,
+                    "raw_response": f"I encountered an issue: {str(e)}. Let me try to help directly.",
+                    "structured_response": None,
+                    "tools_used": [],
+                    "error": str(e)
+                }
+
+        return run
+
+    except Exception as e:
+        print(f"[Chain Build Error] {agent_name}: {str(e)}")
+        return build_agent_chain(agent_name, temperature)
 
 
 # ============================================================================
@@ -303,13 +220,9 @@ Return JSON with:
 def build_conversation_flow():
     """
     Build the complete conversation flow orchestrator.
-    
-    Combines supervisor routing -> specialist agent -> response formatting.
-    This is the main entry point for processing user messages.
-    
-    Returns:
-        A function that takes (user_message, conversation_history)
-        and returns the full processing result
+
+    Combines supervisor routing -> specialist agent (with tools) -> response formatting.
+    This is the main entry point for processing user messages in Phase 3.
     """
     supervisor = build_supervisor_chain()
     
@@ -326,7 +239,8 @@ def build_conversation_flow():
     
     def conversation_flow(
         user_message: str,
-        conversation_history: list = None
+        conversation_history: list = None,
+        user_id: str = None
     ) -> Dict[str, Any]:
         """Process a user message through the full flow."""
         if conversation_history is None:
@@ -347,14 +261,19 @@ def build_conversation_flow():
                 "routing": route_data,
                 "needs_clarification": True,
                 "structured_response": {},
+                "tools_used": [],
             }
         
         # Step 3: Route to primary specialist
         primary_route = routes[0] if routes else 'GENERAL'
         agent_name, temperature = AGENT_CONFIG.get(primary_route, ("workout_planner", 0.4))
         
-        specialist_chain = build_agent_chain(agent_name, temperature)
-        specialist_result = specialist_chain(user_message, conversation_history)
+        # Build tool-enabled agent for Phase 3
+        specialist_chain = build_tool_agent_chain(agent_name, temperature, user_id=user_id)
+        specialist_result = specialist_chain({
+            "message": user_message,
+            "history": conversation_history
+        })
         
         return {
             "agent_used": agent_name,
@@ -363,6 +282,7 @@ def build_conversation_flow():
             "raw_response": specialist_result.get('raw_response', ''),
             "structured_response": specialist_result.get('structured_response', {}),
             "needs_clarification": False,
+            "tools_used": specialist_result.get('tools_used', []),
         }
     
     return conversation_flow

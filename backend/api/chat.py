@@ -1,44 +1,32 @@
 """
-ForgeAI Phase 2: Chat API
-=========================
-
-LangChain-powered chat endpoints with memory management and fact extraction.
-Replaces Phase 1 raw API calls with composable chains.
+ForgeAI Phase 3: Chat API with Tool Support
 """
 
 import os
 from flask import Blueprint, request, jsonify
 
-from backend.chains import build_conversation_flow, build_fact_extraction_chain
+from backend.database import init_db
+from backend.chains import build_conversation_flow
 from backend.core import format_agent_response
 from backend.memory_manager import MemoryManager
+
+# Initialize database on startup
+init_db()
 
 chat_bp = Blueprint('chat', __name__)
 
 # Initialize memory manager (singleton)
 memory = MemoryManager.get_instance()
 
-# Build chains at startup
+# Build chains at startup (Phase 3: with tool support)
 conversation_flow = build_conversation_flow()
-fact_extractor = build_fact_extraction_chain()
 
 
-# ============================================================================
-# SESSION ENDPOINTS
-# ============================================================================
+# Session endpoints
 
 @chat_bp.route('/api/chat/start', methods=['POST'])
 def start_session():
-    """
-    Start a new conversation session.
-    
-    Returns:
-        {
-            "session_id": "...",
-            "welcome": "ForgeAI coaching session started."
-        }
-    """
-    # Create session in memory manager
+    """Start a new conversation session."""
     session = memory.create_session()
     
     return jsonify({
@@ -47,75 +35,44 @@ def start_session():
     })
 
 
-# ============================================================================
-# MESSAGING ENDPOINTS
-# ============================================================================
-
 @chat_bp.route('/api/chat/send', methods=['POST'])
 def send_message():
-    """
-    Send a message and get a response.
-    
-    Request:
-        {
-            "session_id": "...",
-            "message": "..."
-        }
-    
-    Response:
-        {
-            "response": "formatted markdown response",
-            "structured_response": {...},
-            "agent_used": "agent_name",
-            "routing": {...},
-            "routes": ["TAG1", "TAG2"],
-            "needs_clarification": false,
-            "session_stats": {...}
-        }
-    """
+    """Send a message and get a response with tool usage."""
     data = request.json
     session_id = data.get('session_id')
     user_message = data.get('message', '').strip()
 
-    # Validate input
     if not session_id or not memory.get_session(session_id):
         return jsonify({'error': 'Invalid or expired session'}), 400
     if not user_message:
         return jsonify({'error': 'Empty message'}), 400
 
     try:
-        # 1. Extract facts from user message
-        fact_result = fact_extractor(user_message)
-        facts = fact_result.get('structured_response', {}).get('facts', [])
-        if facts:
-            memory.add_facts(session_id, facts)
-
-        # 2. Get conversation history
         history = memory.get_history(session_id)
 
-        # 3. Run through conversation flow
-        flow_result = conversation_flow(user_message, history)
+        flow_result = conversation_flow(
+            user_message,
+            history,
+            user_id=session_id
+        )
 
         agent_used = flow_result.get('agent_used', 'unknown')
         route_data = flow_result.get('routing', {})
         raw_response = flow_result.get('raw_response', '')
         structured = flow_result.get('structured_response', {})
         needs_clarification = flow_result.get('needs_clarification', False)
+        tools_used = flow_result.get('tools_used', [])
 
-        # 4. Format response for display
         if structured and not needs_clarification:
             display_response = format_agent_response(agent_used, structured)
         else:
             display_response = raw_response
 
-        # 5. Update conversation history in memory
         memory.add_message(session_id, 'user', user_message)
         memory.add_message(session_id, 'model', raw_response)
 
-        # 6. Record routing decision
         memory.record_routing(session_id, route_data, agent_used)
 
-        # 7. Trim history to keep memory efficient
         memory.trim_history(session_id, keep_last_turns=10)
 
         return jsonify({
@@ -124,6 +81,7 @@ def send_message():
             "agent_used": agent_used,
             "routing": route_data,
             "routes": route_data.get('route', []),
+            "tools_used": tools_used,
             "needs_clarification": needs_clarification,
             "session_stats": memory.get_session_stats(session_id),
         })
@@ -135,29 +93,9 @@ def send_message():
         return jsonify({'error': 'Failed to process message', 'detail': str(e)}), 500
 
 
-# ============================================================================
-# MEMORY & PROFILE ENDPOINTS
-# ============================================================================
-
 @chat_bp.route('/api/chat/facts', methods=['GET'])
 def get_facts():
-    """
-    Get all extracted facts for a session.
-    
-    Query params:
-        session_id: Session ID
-    
-    Returns:
-        {
-            "session_id": "...",
-            "facts": [...],
-            "profile": {
-                "goals": {...},
-                "measurements": {...},
-                "preferences": {...}
-            }
-        }
-    """
+    """Get all extracted facts for a session."""
     session_id = request.args.get('session_id')
 
     if not session_id or not memory.get_session(session_id):
@@ -179,23 +117,7 @@ def get_facts():
 
 @chat_bp.route('/api/chat/profile', methods=['POST'])
 def update_profile():
-    """
-    Update user profile directly.
-    
-    Request:
-        {
-            "session_id": "...",
-            "goals": {...},
-            "measurements": {...},
-            "preferences": {...}
-        }
-    
-    Returns:
-        {
-            "session_id": "...",
-            "profile": {...}
-        }
-    """
+    """Update user profile directly."""
     data = request.json
     session_id = data.get('session_id')
 
@@ -221,19 +143,7 @@ def update_profile():
 
 @chat_bp.route('/api/chat/history', methods=['GET'])
 def get_history():
-    """
-    Get conversation history for a session.
-    
-    Query params:
-        session_id: Session ID
-        limit: Max messages to return (default: all)
-    
-    Returns:
-        {
-            "session_id": "...",
-            "history": [...]
-        }
-    """
+    """Get conversation history for a session."""
     session_id = request.args.get('session_id')
     limit = request.args.get('limit', type=int)
 
@@ -250,19 +160,7 @@ def get_history():
 
 @chat_bp.route('/api/chat/session-info', methods=['GET'])
 def session_info():
-    """
-    Get complete session information and statistics.
-    
-    Query params:
-        session_id: Session ID
-    
-    Returns:
-        {
-            "session_id": "...",
-            "stats": {...},
-            "profile": {...}
-        }
-    """
+    """Get complete session information and statistics."""
     session_id = request.args.get('session_id')
 
     if not session_id or not memory.get_session(session_id):
@@ -284,16 +182,12 @@ def session_info():
     })
 
 
-# ============================================================================
-# HEALTH & DEBUG ENDPOINTS
-# ============================================================================
-
 @chat_bp.route('/api/health', methods=['GET'])
 def health():
     """Health check endpoint."""
     return jsonify({
         'status': 'ok',
-        'version': 'phase-2',
+        'version': 'phase-3-tools',
         'active_sessions': len(memory.list_sessions()),
     })
 
