@@ -70,7 +70,7 @@ personalize every response.
 
 | Layer | Technology |
 |---|---|
-| Frontend | React 18, Vite, Recharts, WebSocket |
+| Frontend | React, Vite, Recharts, WebSocket |
 | Backend | Python, Flask, SQLAlchemy |
 | AI Orchestration | LangChain, LangGraph |
 | Language Model | Google Gemini 2.5 Flash |
@@ -78,11 +78,62 @@ personalize every response.
 | Structured Database | SQLite (PostgreSQL in production) |
 | Observability | LangSmith |
 | Deployment | Docker, Render, Vercel |
-| CI/CD | GitHub Actions |
+| CI/CD | GitHub Actions, Jenkins |
 
 ---
 
 ## Getting Started
+
+### Prerequisites
+
+- Python 3.10+
+- Node.js 18+
+- Google Gemini API key — free at [aistudio.google.com](https://aistudio.google.com)
+- LangSmith API key — free at [smith.langchain.com](https://smith.langchain.com)
+
+### Backend
+
+```bash
+git clone https://github.com/yourusername/forgeai.git
+cd forgeai
+
+python3 -m venv venv
+source venv/bin/activate
+
+pip install -r requirements.txt
+
+cp .env.example .env
+# Add your API keys to .env
+
+python backend/memory/seed_knowledge.py
+python backend/app.py
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`
+
+---
+
+## Environment Variables
+
+```bash
+GOOGLE_API_KEY=your_gemini_api_key
+GEMINI_MODEL=models/gemini-2.5-flash
+PORT=5001
+DATABASE_URL=sqlite:///forgeai.db
+CHROMA_PATH=./chroma_db
+LANGSMITH_API_KEY=your_langsmith_key
+LANGSMITH_PROJECT=forgeai
+```
+
+---
 
 ## What You Can Do With It
 
@@ -107,7 +158,7 @@ personalize every response.
 | 4 — RAG & ChromaDB | Vector store, semantic memory, fitness research knowledge base |
 | 5 — LangGraph | Multi-agent orchestration, parallel execution, full team coordination |
 | 6 — LLMOps | LangSmith tracing, cost tracking, prompt versioning, rate limiting |
-| 7 — Deployment | Docker, Render, Vercel, GitHub Actions CI/CD |
+| 7 — Deployment | Docker, Render, Vercel, GitHub Actions CI/CD, Jenkins |
 | 8 — Frontend Polish | WebSocket streaming, progress charts, mobile responsive design |
 
 ---
