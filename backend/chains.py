@@ -70,9 +70,19 @@ def build_agent_chain(agent_name: str, temperature: float = 0.3):
     """
     llm = get_llm(temperature=temperature)
     
-    def agent_chain(user_message: str, conversation_history: list = None) -> Dict[str, Any]:
+    def agent_chain(inputs) -> Dict[str, Any]:
         """Execute specialist agent."""
-        if conversation_history is None:
+        # Handle both dict input {"message": ..., "history": ...} and direct args
+        if isinstance(inputs, dict):
+            user_message = inputs.get("message", "")
+            conversation_history = inputs.get("history", [])
+        else:
+            user_message = inputs
+            conversation_history = []
+        
+        if not isinstance(user_message, str):
+            user_message = str(user_message)
+        if not isinstance(conversation_history, list):
             conversation_history = []
         
         system_prompt = build_system_message(agent_name)
@@ -156,8 +166,7 @@ Current question: {{input}}
                 system_prompt=sys_prompt,
                 user_id=user_id or "unknown"
             ),
-            input_variables=["input", "tools", "tool_names",
-                             "agent_scratchpad", "chat_history"]
+            input_variables=["input", "agent_scratchpad", "chat_history"]
         )
 
         agent = create_react_agent(llm=llm, tools=tools, prompt=prompt)

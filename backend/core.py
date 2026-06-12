@@ -35,11 +35,13 @@ def get_llm(temperature: float = 0.3) -> ChatGoogleGenerativeAI:
         raise ValueError("GOOGLE_API_KEY not found in environment variables")
     
     return ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-2.5-flash",
         temperature=temperature,
         google_api_key=api_key,
         top_p=0.95,
         top_k=40,
+        client_options={"api_endpoint": "generativelanguage.googleapis.com"},
+        transport="rest",  # Use REST transport instead of gRPC async
     )
 
 
@@ -102,14 +104,28 @@ def build_message_chain(
     Returns:
         List of message objects suitable for LLM API
     """
+    # Ensure all inputs are proper types
+    if not isinstance(system_prompt, str):
+        system_prompt = str(system_prompt)
+    if not isinstance(user_message, str):
+        user_message = str(user_message)
+    if not isinstance(conversation_history, list):
+        conversation_history = []
+    
     messages = [SystemMessage(content=system_prompt)]
     
     # Add conversation history
     for msg in conversation_history:
-        if msg['role'] == 'user':
-            messages.append(HumanMessage(content=msg['content']))
-        elif msg['role'] == 'model':
-            messages.append(AIMessage(content=msg['content']))
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get('role', '')
+        content = msg.get('content', '')
+        if not isinstance(content, str):
+            content = str(content)
+        if role == 'user' and content:
+            messages.append(HumanMessage(content=content))
+        elif role == 'model' and content:
+            messages.append(AIMessage(content=content))
     
     # Add current user message
     messages.append(HumanMessage(content=user_message))
