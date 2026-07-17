@@ -40,8 +40,7 @@ def get_llm(temperature: float = 0.3) -> ChatGoogleGenerativeAI:
         google_api_key=api_key,
         top_p=0.95,
         top_k=40,
-        client_options={"api_endpoint": "generativelanguage.googleapis.com"},
-        transport="rest",  # Use REST transport instead of gRPC async
+        client_options={"api_endpoint": "https://generativelanguage.googleapis.com"},
     )
 
 
@@ -139,33 +138,65 @@ def build_message_chain(
 
 def extract_json_from_response(response_text: str) -> dict | None:
     """
-    Extract and parse JSON from LLM response text.
+    Extract and parse JSON (dict or list) from LLM response text.
     
-    Handles nested JSON objects and partial responses gracefully.
+    Handles nested JSON objects/arrays and partial responses gracefully.
     
     Args:
         response_text: Raw LLM response text
     
     Returns:
-        Parsed JSON dict, or None if no valid JSON found
+        Parsed JSON dict or list, or None if no valid JSON found
     """
     try:
-        # Find the first opening brace
-        start = response_text.find('{')
-        if start == -1:
+        clean_text = response_text.strip()
+        # Handle markdown blocks if present
+        if "```" in clean_text:
+            parts = clean_text.split("```")
+            for part in parts:
+                if part.startswith("json"):
+                    clean_text = part[4:].strip()
+                    break
+                elif part.strip().startswith("{") or part.strip().startswith("["):
+                    clean_text = part.strip()
+                    break
+        
+        # Try raw load first
+        try:
+            return json.loads(clean_text)
+        except Exception:
+            pass
+
+        # Find the first opening brace or bracket
+        start_idx = -1
+        start_char = None
+        end_char = None
+        for i, char in enumerate(response_text):
+            if char == '{':
+                start_char = '{'
+                end_char = '}'
+                start_idx = i
+                break
+            elif char == '[':
+                start_char = '['
+                end_char = ']'
+                start_idx = i
+                break
+                
+        if start_idx == -1:
             return None
         
-        # Count braces to find the matching closing brace
-        brace_count = 0
-        for i in range(start, len(response_text)):
-            if response_text[i] == '{':
-                brace_count += 1
-            elif response_text[i] == '}':
-                brace_count -= 1
-                if brace_count == 0:
-                    json_str = response_text[start:i+1]
+        # Count matching braces/brackets
+        count = 0
+        for i in range(start_idx, len(response_text)):
+            if response_text[i] == start_char:
+                count += 1
+            elif response_text[i] == end_char:
+                count -= 1
+                if count == 0:
+                    json_str = response_text[start_idx:i+1]
                     return json.loads(json_str)
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError, IndexError):
         pass
     
     return None
