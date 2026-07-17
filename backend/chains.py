@@ -11,6 +11,7 @@ from langchain.agents import create_react_agent, AgentExecutor
 from langchain_core.prompts import PromptTemplate
 from backend.core import get_llm, build_system_message, build_message_chain, extract_json_from_response
 from backend.tools.registry import AGENT_TOOLS
+from backend.memory.rag_pipeline import build_rag_context, extract_and_store_facts, store_coaching_interaction
 
 
 # ============================================================================
@@ -277,18 +278,35 @@ def build_conversation_flow():
         primary_route = routes[0] if routes else 'GENERAL'
         agent_name, temperature = AGENT_CONFIG.get(primary_route, ("workout_planner", 0.4))
         
-        # Build tool-enabled agent for Phase 3
+        # Phase 4: Extract and store facts from message
+        if user_id:
+            extract_and_store_facts(user_id, user_message)
+            
+        # Phase 4: Build RAG context (fetch injuries, facts, history, science)
+        rag_context = ""
+        if user_id:
+            rag_context = build_rag_context(user_id, agent_name, user_message)
+            
+        enhanced_message = f"{rag_context}\n\nUser Question: {user_message}" if rag_context else user_message
+        
+        # Build tool-enabled agent for Phase 3 (with RAG enhanced message)
         specialist_chain = build_tool_agent_chain(agent_name, temperature, user_id=user_id)
         specialist_result = specialist_chain({
-            "message": user_message,
+            "message": enhanced_message,
             "history": conversation_history
         })
+        
+        raw_response = specialist_result.get('raw_response', '')
+        
+        # Phase 4: Summarize and store coaching interaction
+        if user_id and raw_response:
+            store_coaching_interaction(user_id, user_message, raw_response)
         
         return {
             "agent_used": agent_name,
             "routing": route_data,
             "routes": routes,
-            "raw_response": specialist_result.get('raw_response', ''),
+            "raw_response": raw_response,
             "structured_response": specialist_result.get('structured_response', {}),
             "needs_clarification": False,
             "tools_used": specialist_result.get('tools_used', []),
