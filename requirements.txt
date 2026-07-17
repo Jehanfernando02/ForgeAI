@@ -39,3 +39,6 @@ langchain-google-genai>=0.0.1
 langchain-community>=0.0.1
 sqlalchemy>=2.0.0
 aiohttp>=3.8.0
+
+# Phase 4: Vector Database & RAG
+chromadb>=0.4.0
