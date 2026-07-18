@@ -7,8 +7,8 @@ and structured data extraction. Each chain can invoke tools during reasoning.
 """
 
 from typing import Any, Dict, List, Optional
-from langchain.agents import create_react_agent, AgentExecutor
-from langchain_core.prompts import PromptTemplate
+from langchain_core.messages import SystemMessage, HumanMessage
+from langgraph.prebuilt import create_react_agent
 from backend.core import get_llm, build_system_message, build_message_chain, extract_json_from_response
 from backend.tools.registry import AGENT_TOOLS
 from backend.memory.rag_pipeline import build_rag_context, extract_and_store_facts, store_coaching_interaction
@@ -106,114 +106,103 @@ def build_agent_chain(agent_name: str, temperature: float = 0.3):
 
 
 # ============================================================================
-# TOOL-ENABLED AGENT CHAIN (Phase 3)
+# TOOL-ENABLED AGENT CHAIN (Phase 3 / LangGraph Prebuilt ReAct)
 # ============================================================================
 
 def build_tool_agent_chain(agent_name: str, temperature: float = 0.5, user_id: str = None):
     """
     Build an agent chain that can call tools during reasoning.
 
-    This uses LangChain's create_react_agent to give the agent
-    a ReAct reasoning loop — it can think, call a tool, observe
-    the result, think again, and repeat until it has an answer.
+    Uses langgraph.prebuilt.create_react_agent — the modern replacement for
+    the deprecated langchain.agents.AgentExecutor pattern. This gives the
+    agent a ReAct reasoning loop (Thought → Tool call → Observation → repeat)
+    implemented as a compiled LangGraph StateGraph internally.
 
     Args:
         agent_name: which specialist agent to build
         temperature: controls response creativity
-        user_id: injected into tool calls automatically
+        user_id: injected into the system prompt for tool context
 
     Returns:
         a runnable that accepts {"message": str, "history": list}
     """
-    
     llm        = get_llm(temperature=temperature)
     tools      = AGENT_TOOLS.get(agent_name, [])
     sys_prompt = build_system_message(agent_name)
 
-    # ReAct prompt template — tells the agent how to reason and use tools
-    react_template = """{system_prompt}
-
-You have access to these tools:
-{{tools}}
-
-Use this EXACT format when using tools:
-Thought: [your reasoning about what to do next]
-Action: [tool name exactly as listed]
-Action Input: [tool parameters as JSON]
-Observation: [tool result — filled in automatically]
-... (repeat Thought/Action/Observation as needed)
-Thought: I now have enough information to respond
-Final Answer: [your complete response to the user in markdown]
-
-If you don't need tools, respond directly:
-Thought: I can answer this directly
-Final Answer: [your response]
-
-User ID for tool calls: {user_id}
-
-Conversation history:
-{{chat_history}}
-
-Current question: {{input}}
-{{agent_scratchpad}}"""
+    # Append user_id context to system prompt so tools can use it
+    full_system_prompt = (
+        f"{sys_prompt}\n\nUser ID for all tool calls: {user_id or 'unknown'}"
+    )
 
     if not tools:
-        # If no tools available, fall back to basic chain
+        # No tools for this agent — fall back to basic chain
         return build_agent_chain(agent_name, temperature)
 
     try:
-        prompt = PromptTemplate(
-            template=react_template.format(
-                system_prompt=sys_prompt,
-                user_id=user_id or "unknown"
-            ),
-            input_variables=["input", "agent_scratchpad", "chat_history"]
-        )
-
-        agent = create_react_agent(llm=llm, tools=tools, prompt=prompt)
-
-        executor = AgentExecutor(
-            agent=agent,
+        # create_react_agent from langgraph.prebuilt compiles a full
+        # StateGraph with tool node internally. We invoke it directly.
+        agent = create_react_agent(
+            model=llm,
             tools=tools,
-            verbose=False,
-            max_iterations=5,
-            handle_parsing_errors=True,
-            return_intermediate_steps=True
+            prompt=full_system_prompt,
         )
 
         def run(inputs: dict) -> dict:
+            """Invoke the ReAct agent and return a standardized result dict."""
+            user_message = inputs.get("message", "")
             history      = inputs.get("history", [])
-            chat_history = "\n".join(
-                f"{'User' if t['role']=='user' else 'Assistant'}: {t['content']}"
-                for t in history[-6:]  # Last 3 turns for context
-            )
+
+            # Build message list: history turns + current message
+            messages = []
+            for turn in history[-6:]:   # Last 3 conversation turns
+                role    = turn.get("role", "")
+                content = turn.get("content", "")
+                if role == "user":
+                    messages.append(HumanMessage(content=content))
+                elif role == "model":
+                    from langchain_core.messages import AIMessage
+                    messages.append(AIMessage(content=content))
+
+            messages.append(HumanMessage(content=user_message))
+
             try:
-                result = executor.invoke({
-                    "input": inputs["message"],
-                    "chat_history": chat_history
-                })
-                raw      = result.get("output", "")
-                steps    = result.get("intermediate_steps", [])
+                result     = agent.invoke({"messages": messages})
+                all_msgs   = result.get("messages", [])
+
+                # The final AI message is the agent's answer
+                raw = ""
+                for msg in reversed(all_msgs):
+                    if hasattr(msg, 'content') and msg.content and not hasattr(msg, 'tool_calls'):
+                        raw = msg.content
+                        break
+                    # AIMessage with no tool_calls is the final answer
+                    from langchain_core.messages import AIMessage as AIM
+                    if isinstance(msg, AIM) and not getattr(msg, 'tool_calls', []):
+                        raw = msg.content
+                        break
+
+                # Collect tool names from ToolMessages in the conversation
+                from langchain_core.messages import ToolMessage
                 tools_used = [
-                    step[0].tool for step in steps
-                    if hasattr(step[0], 'tool')
-                ] if steps else []
+                    msg.name for msg in all_msgs
+                    if hasattr(msg, 'name') and isinstance(msg, ToolMessage)
+                ]
 
                 return {
-                    "agent": agent_name,
-                    "raw_response": raw,
-                    "structured_response": extract_json_from_response(raw),
-                    "tools_used": tools_used,
-                    "steps": len(steps)
+                    "agent":               agent_name,
+                    "raw_response":        raw,
+                    "structured_response": extract_json_from_response(raw) if raw else None,
+                    "tools_used":          tools_used,
                 }
             except Exception as e:
                 print(f"[Tool Agent Error] {agent_name}: {str(e)}")
                 return {
-                    "agent": agent_name,
-                    "raw_response": f"I encountered an issue: {str(e)}. Let me try to help directly.",
+                    "agent":          agent_name,
+                    "raw_response":   f"I encountered an issue processing your request: {str(e)}",
                     "structured_response": None,
-                    "tools_used": [],
-                    "error": str(e)
+                    "tools_used":     [],
+                    "error":          str(e),
                 }
 
         return run
@@ -223,93 +212,78 @@ Current question: {{input}}
         return build_agent_chain(agent_name, temperature)
 
 
+
+
 # ============================================================================
 # FULL CONVERSATION FLOW (HIGH-LEVEL ORCHESTRATOR)
+# Phase 5: Delegates to LangGraph multi-agent workflow
 # ============================================================================
 
 def build_conversation_flow():
     """
     Build the complete conversation flow orchestrator.
 
-    Combines supervisor routing -> specialist agent (with tools) -> response formatting.
-    This is the main entry point for processing user messages in Phase 3.
+    Phase 5 upgrade: This function now returns a closure that delegates
+    to the LangGraph multi-agent workflow (backend/graph/workflow.py).
+
+    The returned conversation_flow() function maintains the SAME interface
+    as Phase 3 so that api/chat.py requires zero changes.
+
+    Graph execution:
+      rag_context → supervisor → [specialist(s)] → recovery_check → assembler
+
+    Returns:
+        A callable: (user_message, conversation_history, user_id) → dict
     """
-    supervisor = build_supervisor_chain()
-    
-    # Map routes to agent names and temperatures
-    AGENT_CONFIG = {
-        "WORKOUT": ("workout_planner", 0.3),
-        "NUTRITION": ("nutrition_agent", 0.1),
-        "PROGRESS": ("progress_analyst", 0.2),
-        "EMOTIONAL": ("motivational_coach", 0.75),
-        "ASSESSMENT": ("workout_planner", 0.3),
-        "RECOVERY": ("recovery_agent", 0.2),
-        "GENERAL": ("workout_planner", 0.4),
-    }
-    
+    from backend.graph.workflow import run_graph
+
     def conversation_flow(
         user_message: str,
         conversation_history: list = None,
         user_id: str = None
     ) -> Dict[str, Any]:
-        """Process a user message through the full flow."""
+        """Process a user message through the Phase 5 multi-agent graph."""
         if conversation_history is None:
             conversation_history = []
-        
-        # Step 1: Supervisor routing
-        routing_result = supervisor(user_message, conversation_history)
-        route_data = routing_result.get('structured_response', {})
-        routes = route_data.get('route', ['GENERAL'])
-        needs_clarification = route_data.get('needs_clarification', False)
-        clarification = route_data.get('clarification_question')
-        
-        # Step 2: Handle clarification
-        if needs_clarification and clarification:
-            return {
-                "response": clarification,
-                "agent_used": "supervisor",
-                "routing": route_data,
-                "needs_clarification": True,
-                "structured_response": {},
-                "tools_used": [],
-            }
-        
-        # Step 3: Route to primary specialist
-        primary_route = routes[0] if routes else 'GENERAL'
-        agent_name, temperature = AGENT_CONFIG.get(primary_route, ("workout_planner", 0.4))
-        
-        # Phase 4: Extract and store facts from message
-        if user_id:
-            extract_and_store_facts(user_id, user_message)
-            
-        # Phase 4: Build RAG context (fetch injuries, facts, history, science)
-        rag_context = ""
-        if user_id:
-            rag_context = build_rag_context(user_id, agent_name, user_message)
-            
-        enhanced_message = f"{rag_context}\n\nUser Question: {user_message}" if rag_context else user_message
-        
-        # Build tool-enabled agent for Phase 3 (with RAG enhanced message)
-        specialist_chain = build_tool_agent_chain(agent_name, temperature, user_id=user_id)
-        specialist_result = specialist_chain({
-            "message": enhanced_message,
-            "history": conversation_history
-        })
-        
-        raw_response = specialist_result.get('raw_response', '')
-        
-        # Phase 4: Summarize and store coaching interaction
+
+        # ── Execute the LangGraph ─────────────────────────────────────────
+        final_state = run_graph(
+            session_id=user_id or "anonymous",
+            user_message=user_message,
+            conversation_history=conversation_history,
+        )
+
+        raw_response    = final_state.get("final_response", "")
+        agents_used     = final_state.get("agents_used", [])
+        tools_used      = final_state.get("tools_used", [])
+        routes          = final_state.get("routes", [])
+        needs_clarif    = final_state.get("needs_clarification", False)
+        clarif_question = final_state.get("clarification_question")
+        recovery_flag   = final_state.get("recovery_flag", "safe")
+
+        # Handle early-exit clarification path
+        if needs_clarif and clarif_question:
+            raw_response = clarif_question
+
+        # Phase 4: Store coaching interaction in ChromaDB for long-term recall
         if user_id and raw_response:
-            store_coaching_interaction(user_id, user_message, raw_response)
-        
+            try:
+                store_coaching_interaction(user_id, user_message, raw_response)
+            except Exception as e:
+                print(f"[Chains] store_coaching_interaction failed: {e}")
+
+        # ── Return dict matching the contract expected by api/chat.py ─────
         return {
-            "agent_used": agent_name,
-            "routing": route_data,
-            "routes": routes,
-            "raw_response": raw_response,
-            "structured_response": specialist_result.get('structured_response', {}),
-            "needs_clarification": False,
-            "tools_used": specialist_result.get('tools_used', []),
+            "agent_used":          agents_used[0] if agents_used else "unknown",
+            "agents_used":         agents_used,
+            "routing":             {"route": routes},
+            "routes":              routes,
+            "raw_response":        raw_response,
+            "structured_response": {},
+            "needs_clarification": needs_clarif,
+            "tools_used":          tools_used,
+            "recovery_flag":       recovery_flag,
         }
-    
+
     return conversation_flow
+
