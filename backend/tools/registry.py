@@ -9,6 +9,7 @@ needs every tool. Giving agents only relevant tools
 keeps their reasoning clean and focused.
 """
 
+from typing import List, Dict
 from langchain_core.tools import tool
 from backend.tools.workout_tools import (
     log_workout,
@@ -39,7 +40,7 @@ from backend.tools.user_tools import (
 @tool
 def tool_log_workout(
     user_id: str,
-    exercises: list,
+    exercises: List[dict],
     session_notes: str = "",
     perceived_difficulty: str = "moderate",
     duration_minutes: int = None
@@ -138,9 +139,10 @@ def tool_calculate_tdee(
 @tool
 def tool_log_nutrition(
     user_id: str,
-    meals: list,
+    meals: List[dict],
     notes: str = ""
 ) -> dict:
+
     """
     Save a nutrition log entry for the user.
     Use this when the user describes what they ate today.
