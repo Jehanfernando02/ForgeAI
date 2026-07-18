@@ -1,8 +1,10 @@
 """
-ForgeAI Phase 2: Core LangChain Configuration
-==============================================
+ForgeAI Phase 2–6: Core LangChain Configuration
+================================================
 
-Provides LLM initialization, prompt loading, and message chain building utilities.
+Provides LLM initialization, prompt loading, message chain building utilities,
+JSON extraction, response formatting, and LangSmith observability configuration.
+
 All chains in ForgeAI are built using these core components.
 """
 
@@ -42,6 +44,41 @@ def get_llm(temperature: float = 0.3) -> ChatGoogleGenerativeAI:
         top_k=40,
         client_options={"api_endpoint": "https://generativelanguage.googleapis.com"},
     )
+
+
+# ============================================================================
+# LANGSMITH OBSERVABILITY (Phase 6)
+# ============================================================================
+
+def configure_langsmith() -> bool:
+    """
+    Enable LangSmith tracing by setting the required LangChain environment variables.
+
+    LangChain automatically detects LANGCHAIN_TRACING_V2=true and routes all
+    LLM calls, tool executions, and chain runs to the LangSmith dashboard at
+    https://smith.langchain.com.
+
+    This must be called ONCE at application startup before any chains are built.
+
+    Returns:
+        True if tracing was enabled, False if the API key was not found.
+    """
+    api_key = os.getenv("LANGSMITH_API_KEY")
+    project  = os.getenv("LANGSMITH_PROJECT", "ForgeAI")
+
+    if not api_key:
+        print("[LangSmith] ⚠️  LANGSMITH_API_KEY not set — tracing disabled.")
+        print("[LangSmith]    Add LANGSMITH_API_KEY to your .env to enable observability.")
+        return False
+
+    # These three env vars are the LangChain standard for enabling tracing.
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_API_KEY"]     = api_key
+    os.environ["LANGCHAIN_PROJECT"]     = project
+
+    print(f"[LangSmith] ✅  Tracing enabled → project: '{project}'")
+    print(f"[LangSmith]    Dashboard: https://smith.langchain.com/o/*/projects")
+    return True
 
 
 # ============================================================================
