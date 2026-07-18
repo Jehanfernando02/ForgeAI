@@ -35,6 +35,7 @@ app = create_app()
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5001))
-    print(f"\n  ForgeAI backend running → http://localhost:{port}\n")
-    app.run(debug=True, port=port)
+    print(f"\n  ForgeAI backend running → http://0.0.0.0:{port}\n")
+    app.run(debug=True, host='0.0.0.0', port=port)
+
 
