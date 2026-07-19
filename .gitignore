@@ -20,3 +20,8 @@ __pycache__/
 # ChromaDB and LangSmith
 chroma_db/
 .langsmith/
+test_phase*.py
+implementation_plan.md
+forgeai_complete_guide.md
+forgeai_everything_from_zero.md
+forgeai.db
