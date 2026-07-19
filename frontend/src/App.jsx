@@ -4,412 +4,516 @@ import ReactMarkdown from 'react-markdown'
 import {
   Dumbbell, Zap, Brain, TrendingUp, Heart,
   Shield, Send, Loader2, Flame, ChevronRight,
-  Sparkles, Activity, BarChart3, MessageSquare
+  Sparkles, Activity, BarChart3, MessageSquare,
+  Target, Clock, Users, Star, AlertTriangle,
+  CheckCircle2, Circle, Info, Cpu
 } from 'lucide-react'
 import './App.css'
 
-// ── Agent metadata ──────────────────────────────────────────
+// ─── Agent registry ─────────────────────────────────────────────────────────
 const AGENTS = {
-  workout_planner:    { label: 'Workout Planner',    icon: Dumbbell,    color: '#f97316', bg: 'rgba(249,115,22,0.12)'  },
-  nutrition_agent:    { label: 'Nutrition Agent',     icon: Flame,       color: '#22c55e', bg: 'rgba(34,197,94,0.12)'   },
-  progress_analyst:   { label: 'Progress Analyst',   icon: TrendingUp,  color: '#6366f1', bg: 'rgba(99,102,241,0.12)'  },
-  motivational_coach: { label: 'Motivational Coach', icon: Heart,       color: '#ec4899', bg: 'rgba(236,72,153,0.12)'  },
-  recovery_agent:     { label: 'Recovery Agent',     icon: Shield,      color: '#22d3ee', bg: 'rgba(34,211,238,0.12)'  },
-  supervisor:         { label: 'Supervisor',         icon: Brain,       color: '#8b5cf6', bg: 'rgba(139,92,246,0.12)'  },
+  workout_planner:    { label: 'Workout Planner',    short: 'Workout',     icon: Dumbbell,    hue: '24'   },
+  nutrition_agent:    { label: 'Nutrition Agent',    short: 'Nutrition',   icon: Flame,       hue: '142'  },
+  progress_analyst:   { label: 'Progress Analyst',  short: 'Progress',    icon: TrendingUp,  hue: '234'  },
+  motivational_coach: { label: 'Motivational Coach',short: 'Mindset',     icon: Heart,       hue: '330'  },
+  recovery_agent:     { label: 'Recovery Specialist',short: 'Recovery',   icon: Shield,      hue: '186'  },
+  supervisor:         { label: 'AI Supervisor',      short: 'Routing',     icon: Brain,       hue: '270'  },
+  unknown:            { label: 'ForgeAI',            short: 'AI',          icon: Zap,         hue: '24'   },
 }
 
 const QUICK_PROMPTS = [
-  { text: 'Design me a chest & triceps workout', icon: Dumbbell },
-  { text: 'Calculate my macro targets', icon: Flame },
-  { text: 'Am I overtraining?', icon: Activity },
-  { text: 'I feel unmotivated lately', icon: Heart },
+  { text: 'Design me a chest & triceps workout', icon: Dumbbell, tag: 'Workout' },
+  { text: 'What should I eat for muscle building?', icon: Flame, tag: 'Nutrition' },
+  { text: 'Am I overtraining? I feel drained', icon: Shield, tag: 'Recovery' },
+  { text: "I've lost motivation — help me get it back", icon: Heart, tag: 'Mindset' },
+  { text: 'Check my progressive overload progress', icon: TrendingUp, tag: 'Progress' },
+  { text: 'Calculate my TDEE and macros', icon: Target, tag: 'Nutrition' },
 ]
 
-// ── Typing indicator ────────────────────────────────────────
-function TypingDots() {
+// ─── Typing animation ────────────────────────────────────────────────────────
+function TypingIndicator() {
   return (
-    <div className="typing-dots">
-      <span /><span /><span />
+    <div className="typing-wrap">
+      <div className="typing-avatar">
+        <Zap size={13} />
+      </div>
+      <div className="typing-bubble">
+        <span className="typing-dot" />
+        <span className="typing-dot" />
+        <span className="typing-dot" />
+      </div>
     </div>
   )
 }
 
-// ── Agent badge ──────────────────────────────────────────────
-function AgentBadge({ agentKey }) {
-  const agent = AGENTS[agentKey]
-  if (!agent) return null
-  const Icon = agent.icon
+// ─── Agent pill / badge ──────────────────────────────────────────────────────
+function AgentPill({ agentKey, size = 'sm' }) {
+  const agent = AGENTS[agentKey] || AGENTS.unknown
+  const Icon  = agent.icon
   return (
-    <div className="agent-badge" style={{ background: agent.bg, borderColor: agent.color + '40' }}>
-      <Icon size={11} style={{ color: agent.color }} />
-      <span style={{ color: agent.color }}>{agent.label}</span>
+    <span className={`agent-pill agent-pill-${size}`} data-hue={agent.hue}
+      style={{ '--h': agent.hue }}>
+      <Icon size={size === 'sm' ? 10 : 13} />
+      {agent.short}
+    </span>
+  )
+}
+
+// ─── Recovery flag banner ────────────────────────────────────────────────────
+function RecoveryBanner({ flag }) {
+  if (!flag || flag === 'safe') return null
+  const isBlocked = flag === 'blocked'
+  return (
+    <div className={`recovery-banner ${flag}`}>
+      {isBlocked ? <AlertTriangle size={14} /> : <Info size={14} />}
+      <span>{isBlocked ? 'Plan flagged — review before attempting' : 'Recovery note attached'}</span>
     </div>
   )
 }
 
-// ── Single message bubble ────────────────────────────────────
-function Message({ msg }) {
+// ─── Single message ──────────────────────────────────────────────────────────
+function Message({ msg, isLatest }) {
   const isUser = msg.role === 'user'
   return (
-    <div className={`message-row ${isUser ? 'user' : 'assistant'}`}>
+    <div className={`msg-row ${isUser ? 'msg-user' : 'msg-ai'} ${isLatest ? 'msg-latest' : ''}`}>
       {!isUser && (
-        <div className="avatar assistant-avatar">
-          <Zap size={14} />
+        <div className="msg-avatar ai-av" style={{ '--h': (AGENTS[msg.agent] || AGENTS.unknown).hue }}>
+          {(() => { const Icon = (AGENTS[msg.agent] || AGENTS.unknown).icon; return <Icon size={14} /> })()}
         </div>
       )}
-      <div className="message-content">
-        {!isUser && msg.agent && <AgentBadge agentKey={msg.agent} />}
-        <div className={`bubble ${isUser ? 'bubble-user' : 'bubble-assistant'}`}>
+
+      <div className="msg-body">
+        {!isUser && (
+          <div className="msg-meta">
+            <AgentPill agentKey={msg.agent} size="sm" />
+            <span className="msg-time">{msg.time}</span>
+          </div>
+        )}
+
+        <div className={`msg-bubble ${isUser ? 'bubble-user' : 'bubble-ai'}`}>
           {isUser ? (
             <p>{msg.text}</p>
           ) : (
-            <ReactMarkdown>{msg.text}</ReactMarkdown>
+            <ReactMarkdown
+              components={{
+                h1: ({ children }) => <h1 className="md-h1">{children}</h1>,
+                h2: ({ children }) => <h2 className="md-h2">{children}</h2>,
+                h3: ({ children }) => <h3 className="md-h3">{children}</h3>,
+                strong: ({ children }) => <strong className="md-bold">{children}</strong>,
+                code: ({ inline, children }) => inline
+                  ? <code className="md-inline-code">{children}</code>
+                  : <pre className="md-code-block"><code>{children}</code></pre>,
+                li: ({ children }) => <li className="md-li">{children}</li>,
+                hr: () => <hr className="md-hr" />,
+              }}
+            >
+              {msg.text}
+            </ReactMarkdown>
           )}
         </div>
-        <span className="timestamp">{msg.time}</span>
+
+        {!isUser && <RecoveryBanner flag={msg.recoveryFlag} />}
+
+        {isUser && <span className="msg-time" style={{ alignSelf: 'flex-end' }}>{msg.time}</span>}
+
+        {!isUser && msg.toolsUsed?.length > 0 && (
+          <div className="tools-used">
+            <Cpu size={10} />
+            {msg.toolsUsed.map(t => <span key={t} className="tool-tag">{t.replace('tool_', '')}</span>)}
+          </div>
+        )}
       </div>
+
       {isUser && (
-        <div className="avatar user-avatar">
-          <span>U</span>
-        </div>
+        <div className="msg-avatar user-av">U</div>
       )}
     </div>
   )
 }
 
-// ── Activity panel item ──────────────────────────────────────
-function ActivityItem({ item }) {
-  const agent = AGENTS[item.agent]
-  if (!agent) return null
-  const Icon = agent.icon
+// ─── Agent activity feed ─────────────────────────────────────────────────────
+function AgentFeed({ log }) {
+  if (log.length === 0) {
+    return (
+      <div className="feed-empty">
+        <div className="feed-empty-icon"><Brain size={28} /></div>
+        <p>Send a message to watch your AI team coordinate</p>
+      </div>
+    )
+  }
+
   return (
-    <div className={`activity-item ${item.status}`}>
-      <div className="activity-icon" style={{ background: agent.bg }}>
-        <Icon size={13} style={{ color: agent.color }} />
-      </div>
-      <div className="activity-info">
-        <span className="activity-agent" style={{ color: agent.color }}>
-          {agent.label}
-        </span>
-        <span className="activity-detail">{item.detail}</span>
-      </div>
-      <div className={`activity-status-dot ${item.status}`} />
+    <div className="feed-list">
+      {log.map((item, i) => {
+        const agent = AGENTS[item.agent] || AGENTS.unknown
+        const Icon  = agent.icon
+        const isDone = item.status === 'done'
+        return (
+          <div key={i} className={`feed-item ${isDone ? 'feed-done' : 'feed-active'}`}>
+            <div className="feed-icon" style={{ '--h': agent.hue }}>
+              <Icon size={12} />
+            </div>
+            <div className="feed-info">
+              <span className="feed-agent">{agent.label}</span>
+              <span className="feed-detail">{item.detail}</span>
+            </div>
+            <div className="feed-status">
+              {isDone
+                ? <CheckCircle2 size={14} className="icon-done" />
+                : <Circle size={14} className="icon-active spin-slow" />
+              }
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
 
-// ── Sidebar ──────────────────────────────────────────────────
-function Sidebar({ activePanel, setActivePanel, activityLog }) {
-  const navItems = [
-    { id: 'chat',     icon: MessageSquare, label: 'Chat'      },
-    { id: 'activity', icon: Activity,      label: 'Agents'    },
-    { id: 'stats',    icon: BarChart3,     label: 'Stats'     },
+// ─── Stats panel ────────────────────────────────────────────────────────────
+function StatsPanel({ metrics }) {
+  const items = [
+    { label: 'Messages sent',  value: metrics.messages,   icon: MessageSquare, hue: '24'  },
+    { label: 'Agents invoked', value: metrics.agents,     icon: Users,         hue: '234' },
+    { label: 'Tools called',   value: metrics.tools,      icon: Cpu,           hue: '142' },
+    { label: 'Session time',   value: metrics.time,       icon: Clock,         hue: '270' },
   ]
+
+  return (
+    <div className="stats-container">
+      <div className="stats-header">
+        <BarChart3 size={16} />
+        <h2>Session Overview</h2>
+      </div>
+      <div className="stats-grid">
+        {items.map(item => {
+          const Icon = item.icon
+          return (
+            <div key={item.label} className="stat-card" style={{ '--h': item.hue }}>
+              <div className="stat-icon"><Icon size={16} /></div>
+              <span className="stat-value">{item.value}</span>
+              <span className="stat-label">{item.label}</span>
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="agents-grid-header">
+        <Star size={14} />
+        <h3>Your Coaching Team</h3>
+      </div>
+      <div className="agents-team-grid">
+        {Object.entries(AGENTS)
+          .filter(([k]) => !['supervisor', 'unknown'].includes(k))
+          .map(([key, agent]) => {
+            const Icon = agent.icon
+            return (
+              <div key={key} className="team-card" style={{ '--h': agent.hue }}>
+                <div className="team-icon"><Icon size={18} /></div>
+                <span className="team-label">{agent.label}</span>
+                <div className="team-dot" />
+              </div>
+            )
+          })
+        }
+      </div>
+    </div>
+  )
+}
+
+// ─── Sidebar ─────────────────────────────────────────────────────────────────
+function Sidebar({ active, setActive, feedCount }) {
+  const nav = [
+    { id: 'chat',    icon: MessageSquare, label: 'Chat'    },
+    { id: 'agents',  icon: Activity,      label: 'Agents', badge: feedCount },
+    { id: 'stats',   icon: BarChart3,     label: 'Stats'   },
+  ]
+
   return (
     <aside className="sidebar">
-      <div className="sidebar-logo">
-        <div className="logo-icon"><Flame size={20} /></div>
-        <div className="logo-text">
-          <span className="logo-name">ForgeAI</span>
-          <span className="logo-sub">AI Coaching</span>
+      <div className="sb-brand">
+        <div className="sb-logo">
+          <Flame size={18} />
+        </div>
+        <div>
+          <span className="sb-name">ForgeAI</span>
+          <span className="sb-tagline">Multi-Agent Coaching</span>
         </div>
       </div>
 
-      <nav className="sidebar-nav">
-        {navItems.map(({ id, icon: Icon, label }) => (
+      <nav className="sb-nav">
+        {nav.map(({ id, icon: Icon, label, badge }) => (
           <button
             key={id}
-            className={`nav-btn ${activePanel === id ? 'active' : ''}`}
-            onClick={() => setActivePanel(id)}
+            className={`sb-link ${active === id ? 'sb-active' : ''}`}
+            onClick={() => setActive(id)}
           >
-            <Icon size={18} />
+            <Icon size={16} />
             <span>{label}</span>
-            {id === 'activity' && activityLog.length > 0 && (
-              <span className="nav-badge">{activityLog.length}</span>
-            )}
+            {badge > 0 && <span className="sb-badge">{badge}</span>}
           </button>
         ))}
       </nav>
 
-      <div className="sidebar-agents">
-        <p className="sidebar-section-label">Your Team</p>
-        {Object.entries(AGENTS).filter(([k]) => k !== 'supervisor').map(([key, agent]) => {
-          const Icon = agent.icon
-          return (
-            <div key={key} className="sidebar-agent">
-              <div className="sidebar-agent-icon" style={{ background: agent.bg }}>
-                <Icon size={13} style={{ color: agent.color }} />
+      <div className="sb-agents">
+        <p className="sb-section">Live Agents</p>
+        {Object.entries(AGENTS)
+          .filter(([k]) => !['supervisor', 'unknown'].includes(k))
+          .map(([key, agent]) => {
+            const Icon = agent.icon
+            return (
+              <div key={key} className="sb-agent" style={{ '--h': agent.hue }}>
+                <div className="sb-agent-icon"><Icon size={12} /></div>
+                <span className="sb-agent-name">{agent.label}</span>
+                <span className="sb-agent-dot" />
               </div>
-              <span className="sidebar-agent-name">{agent.label}</span>
-            </div>
-          )
-        })}
+            )
+          })}
       </div>
     </aside>
   )
 }
 
-// ── Stats panel placeholder ──────────────────────────────────
-function StatsPanel() {
-  const stats = [
-    { label: 'Workouts Logged', value: '0', color: '#f97316' },
-    { label: 'Avg Daily Protein', value: '— g', color: '#22c55e' },
-    { label: 'Streak', value: '0 days', color: '#6366f1' },
-    { label: 'PRs This Month', value: '0', color: '#22d3ee' },
-  ]
-  return (
-    <div className="stats-panel">
-      <div className="panel-header">
-        <BarChart3 size={18} style={{ color: '#f97316' }} />
-        <h2>Your Progress</h2>
-      </div>
-      <div className="stats-grid">
-        {stats.map(s => (
-          <div key={s.label} className="stat-card">
-            <span className="stat-value" style={{ color: s.color }}>{s.value}</span>
-            <span className="stat-label">{s.label}</span>
-          </div>
-        ))}
-      </div>
-      <div className="coming-soon">
-        <Sparkles size={32} style={{ color: '#f97316', opacity: 0.5 }} />
-        <p>Full analytics dashboard coming in Phase 8</p>
-        <span>Workout trends, strength curves, macro adherence & more</span>
-      </div>
-    </div>
-  )
-}
-
-// ── Activity panel ───────────────────────────────────────────
-function ActivityPanel({ log }) {
-  return (
-    <div className="activity-panel">
-      <div className="panel-header">
-        <Activity size={18} style={{ color: '#f97316' }} />
-        <h2>Agent Activity</h2>
-      </div>
-      {log.length === 0 ? (
-        <div className="activity-empty">
-          <Brain size={36} style={{ color: '#f97316', opacity: 0.3 }} />
-          <p>No activity yet</p>
-          <span>Send a message to see your AI team in action</span>
-        </div>
-      ) : (
-        <div className="activity-list">
-          {log.map((item, i) => <ActivityItem key={i} item={item} />)}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Main App ─────────────────────────────────────────────────
+// ─── Root App ────────────────────────────────────────────────────────────────
 export default function App() {
   const [sessionId, setSessionId]   = useState(null)
   const [messages, setMessages]     = useState([])
   const [input, setInput]           = useState('')
   const [loading, setLoading]       = useState(false)
   const [activePanel, setActivePanel] = useState('chat')
-  const [activityLog, setActivityLog] = useState([])
+  const [feed, setFeed]             = useState([])
   const [connected, setConnected]   = useState(false)
+  const [sessionMetrics, setSessionMetrics] = useState({
+    messages: 0, agents: 0, tools: 0, time: '0:00'
+  })
+  const [startTime]                 = useState(Date.now())
 
-  const bottomRef  = useRef(null)
-  const inputRef   = useRef(null)
+  const bottomRef = useRef(null)
+  const inputRef  = useRef(null)
+  const inputWrap = useRef(null)
 
-  const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const ts = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
-  // Scroll to bottom whenever messages change
+  // ── Auto-scroll ────────────────────────────────────────────────────────────
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
 
-  // Initialize session
+  // ── Session timer ──────────────────────────────────────────────────────────
   useEffect(() => {
-    axios.post('/api/chat/start').then(res => {
-      setSessionId(res.data.session_id)
-      setConnected(true)
-      setMessages([{
-        id: 'welcome',
-        role: 'assistant',
-        text: "Welcome to **ForgeAI** 🔥\n\nI'm your AI coaching team — a workout planner, nutritionist, progress analyst, recovery specialist, and motivational coach all working together.\n\nWhat are we working on today?",
-        agent: null,
-        time: now()
-      }])
-    }).catch(() => {
-      setMessages([{
-        id: 'error',
-        role: 'assistant',
-        text: 'Failed to connect to ForgeAI. Make sure the backend is running on port 5001.',
-        agent: null,
-        time: now()
-      }])
-    })
+    const timer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000)
+      const m = Math.floor(elapsed / 60)
+      const s = elapsed % 60
+      setSessionMetrics(prev => ({ ...prev, time: `${m}:${s.toString().padStart(2, '0')}` }))
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [startTime])
+
+  // ── Init session ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    axios.post('/api/chat/start')
+      .then(res => {
+        setSessionId(res.data.session_id)
+        setConnected(true)
+        setMessages([{
+          id: 'welcome',
+          role: 'assistant',
+          text: "Hey, welcome to **ForgeAI** 🔥\n\nI've got a full team ready for you — a workout planner, nutritionist, progress analyst, recovery specialist, and mindset coach. They work together to give you one coherent answer.\n\nWhat are we working on?",
+          agent: null,
+          time: ts(),
+        }])
+      })
+      .catch(() => {
+        setMessages([{
+          id: 'err',
+          role: 'assistant',
+          text: '**Backend not running.** Start the Flask server on port 5001:\n\n```\ncd ForgeAI && python -m backend.app\n```',
+          agent: null,
+          time: ts(),
+        }])
+      })
   }, [])
 
-  const addActivity = useCallback((agent, detail, status = 'active') => {
-    setActivityLog(prev => [{ agent, detail, status, time: now() }, ...prev].slice(0, 20))
-  }, [])
+  // ── Auto-resize textarea ───────────────────────────────────────────────────
+  const autoResize = (e) => {
+    e.target.style.height = 'auto'
+    e.target.style.height = Math.min(e.target.scrollHeight, 140) + 'px'
+  }
 
-  const sendMessage = useCallback(async (text) => {
-    const messageText = text || input.trim()
-    if (!messageText || !sessionId || loading) return
+  // ── Send message ───────────────────────────────────────────────────────────
+  const send = useCallback(async (text) => {
+    const msg = (text || input).trim()
+    if (!msg || !sessionId || loading) return
 
     setInput('')
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto'
+    }
     setLoading(true)
     setActivePanel('chat')
 
-    // Add user message
-    setMessages(prev => [...prev, {
-      id: Date.now(),
-      role: 'user',
-      text: messageText,
-      time: now()
-    }])
-
-    // Show supervisor activity
-    addActivity('supervisor', 'Routing your request...', 'active')
+    const userMsg = { id: Date.now(), role: 'user', text: msg, time: ts() }
+    setMessages(prev => [...prev, userMsg])
+    setFeed(prev => [{ agent: 'supervisor', detail: 'Analysing request…', status: 'active', time: ts() }, ...prev])
 
     try {
-      const res = await axios.post('/api/chat/send', {
-        session_id: sessionId,
-        message: messageText
+      const res = await axios.post('/api/chat/send', { session_id: sessionId, message: msg })
+      const { response, agent_used, agents_used = [], tools_used = [], recovery_flag, routes = [] } = res.data
+
+      // Update feed
+      setFeed(prev => {
+        const next = [
+          { agent: 'supervisor', detail: `Routed → ${routes.join(', ') || agent_used}`, status: 'done', time: ts() },
+          ...agents_used.map(a => ({ agent: a, detail: 'Response generated', status: 'done', time: ts() })),
+          ...prev.slice(1)
+        ]
+        return next.slice(0, 30)
       })
 
-      const { response, agent_used, routing, routes } = res.data
-
-      // Update activity log
-      addActivity('supervisor', `Routed → ${routes?.join(', ') || agent_used}`, 'done')
-      addActivity(agent_used, 'Generating response...', 'done')
-
-      setMessages(prev => [...prev, {
+      const aiMsg = {
         id: Date.now() + 1,
         role: 'assistant',
         text: response,
         agent: agent_used,
-        routing,
-        time: now()
-      }])
-    } catch {
+        toolsUsed: tools_used,
+        recoveryFlag: recovery_flag,
+        time: ts(),
+      }
+      setMessages(prev => [...prev, aiMsg])
+
+      // Update session metrics
+      setSessionMetrics(prev => ({
+        ...prev,
+        messages: prev.messages + 1,
+        agents:   prev.agents + (agents_used.length || 1),
+        tools:    prev.tools + tools_used.length,
+      }))
+    } catch (err) {
+      const isRateLimit = err.response?.status === 429
       setMessages(prev => [...prev, {
         id: Date.now() + 1,
         role: 'assistant',
-        text: 'Something went wrong. Please try again.',
+        text: isRateLimit
+          ? '⏳ **Rate limit reached.** You can send up to 10 messages per minute. Give it a moment.'
+          : '**Something went wrong.** The backend may have timed out. Try again.',
         agent: null,
-        time: now()
+        time: ts(),
       }])
     } finally {
       setLoading(false)
-      setTimeout(() => inputRef.current?.focus(), 100)
+      setTimeout(() => inputRef.current?.focus(), 80)
     }
-  }, [input, sessionId, loading, addActivity])
+  }, [input, sessionId, loading])
 
-  const handleKey = (e) => {
+  const onKey = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      sendMessage()
+      send()
     }
   }
 
-  return (
-    <div className="app-shell">
-      <Sidebar
-        activePanel={activePanel}
-        setActivePanel={setActivePanel}
-        activityLog={activityLog}
-      />
+  const showQuickPrompts = messages.length <= 1 && !loading
 
-      <main className="main-area">
-        {/* Top bar */}
+  return (
+    <div className="shell">
+      <Sidebar active={activePanel} setActive={setActivePanel} feedCount={feed.length} />
+
+      <main className="main">
+
+        {/* ── Top bar ───────────────────────────────────────────────────── */}
         <header className="topbar">
           <div className="topbar-left">
-            <div className={`connection-dot ${connected ? 'online' : 'offline'}`} />
-            <span className="topbar-status">
-              {connected ? 'All agents online' : 'Connecting...'}
-            </span>
+            <div className={`status-dot ${connected ? 'online' : 'offline'}`} />
+            <span className="status-label">{connected ? 'All agents online' : 'Connecting…'}</span>
           </div>
-          <div className="topbar-right">
-            {Object.entries(AGENTS).slice(0, 5).map(([key, agent]) => {
-              const Icon = agent.icon
-              return (
-                <div key={key} className="topbar-agent" title={agent.label}
-                  style={{ background: agent.bg, borderColor: agent.color + '30' }}>
-                  <Icon size={12} style={{ color: agent.color }} />
-                </div>
-              )
-            })}
+          <div className="topbar-agents">
+            {Object.entries(AGENTS)
+              .filter(([k]) => !['supervisor', 'unknown'].includes(k))
+              .map(([key, a]) => {
+                const Icon = a.icon
+                return (
+                  <div key={key} title={a.label} className="topbar-agent" style={{ '--h': a.hue }}>
+                    <Icon size={11} />
+                  </div>
+                )
+              })}
           </div>
         </header>
 
-        {/* Panels */}
-        <div className="panel-area">
-          {/* Chat panel */}
-          <div className={`panel chat-panel ${activePanel === 'chat' ? 'panel-visible' : 'panel-hidden'}`}>
-            <div className="messages-area">
-              {messages.map(msg => <Message key={msg.id} msg={msg} />)}
-              {loading && (
-                <div className="message-row assistant">
-                  <div className="avatar assistant-avatar"><Zap size={14} /></div>
-                  <div className="message-content">
-                    <div className="bubble bubble-assistant loading-bubble">
-                      <TypingDots />
-                    </div>
-                  </div>
-                </div>
-              )}
+        {/* ── Panel area ────────────────────────────────────────────────── */}
+        <div className="panels">
+
+          {/* Chat */}
+          <div className={`panel ${activePanel === 'chat' ? 'panel-show' : 'panel-hide'}`}>
+            <div className="messages">
+              {messages.map((m, i) => (
+                <Message key={m.id} msg={m} isLatest={i === messages.length - 1} />
+              ))}
+              {loading && <TypingIndicator />}
               <div ref={bottomRef} />
             </div>
 
             {/* Quick prompts */}
-            {messages.length <= 1 && (
-              <div className="quick-prompts">
-                {QUICK_PROMPTS.map(({ text, icon: Icon }) => (
-                  <button key={text} className="quick-btn" onClick={() => sendMessage(text)}>
-                    <Icon size={14} />
-                    <span>{text}</span>
-                    <ChevronRight size={12} className="quick-arrow" />
-                  </button>
-                ))}
+            {showQuickPrompts && (
+              <div className="quick-area">
+                <p className="quick-label">Suggested questions</p>
+                <div className="quick-grid">
+                  {QUICK_PROMPTS.map(({ text, icon: Icon, tag }) => (
+                    <button key={text} className="quick-card" onClick={() => send(text)}>
+                      <div className="quick-icon"><Icon size={14} /></div>
+                      <div className="quick-body">
+                        <span className="quick-tag">{tag}</span>
+                        <span className="quick-text">{text}</span>
+                      </div>
+                      <ChevronRight size={13} className="quick-arrow" />
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
             {/* Input */}
-            <div className="input-area">
-              <div className="input-wrapper">
+            <div className="input-dock" ref={inputWrap}>
+              <div className={`input-box ${loading ? 'input-loading' : ''}`}>
                 <textarea
                   ref={inputRef}
-                  className="chat-input"
+                  className="input-ta"
                   value={input}
-                  onChange={e => setInput(e.target.value)}
-                  onKeyDown={handleKey}
-                  placeholder="Ask your coaching team anything..."
+                  onChange={e => { setInput(e.target.value); autoResize(e) }}
+                  onKeyDown={onKey}
+                  placeholder="Ask your coaching team anything…"
                   disabled={loading || !connected}
                   rows={1}
                 />
                 <button
-                  className={`send-btn ${loading || !input.trim() ? 'disabled' : ''}`}
-                  onClick={() => sendMessage()}
-                  disabled={loading || !input.trim() || !connected}
+                  className={`send-btn ${!input.trim() || loading ? 'send-off' : 'send-on'}`}
+                  onClick={() => send()}
+                  disabled={!input.trim() || loading || !connected}
+                  aria-label="Send message"
                 >
-                  {loading
-                    ? <Loader2 size={18} className="spin" />
-                    : <Send size={18} />
-                  }
+                  {loading ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
                 </button>
               </div>
               <p className="input-hint">
-                Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line
+                <kbd>Enter</kbd> to send &nbsp;·&nbsp; <kbd>Shift+Enter</kbd> for new line
               </p>
             </div>
           </div>
 
-          {/* Activity panel */}
-          <div className={`panel ${activePanel === 'activity' ? 'panel-visible' : 'panel-hidden'}`}>
-            <ActivityPanel log={activityLog} />
+          {/* Agent feed */}
+          <div className={`panel panel-pad ${activePanel === 'agents' ? 'panel-show' : 'panel-hide'}`}>
+            <div className="panel-title">
+              <Activity size={16} />
+              <h2>Agent Activity</h2>
+              <span className="panel-subtitle">Live coordination feed</span>
+            </div>
+            <AgentFeed log={feed} />
           </div>
 
-          {/* Stats panel */}
-          <div className={`panel ${activePanel === 'stats' ? 'panel-visible' : 'panel-hidden'}`}>
-            <StatsPanel />
+          {/* Stats */}
+          <div className={`panel panel-pad ${activePanel === 'stats' ? 'panel-show' : 'panel-hide'}`}>
+            <StatsPanel metrics={sessionMetrics} />
           </div>
         </div>
       </main>
