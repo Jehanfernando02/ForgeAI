@@ -40,6 +40,12 @@ def _get_tool_agent_chain(agent_name: str, temperature: float, user_id: str):
     return build_tool_agent_chain(agent_name, temperature, user_id=user_id)
 
 
+def _friendly_error(e: Exception) -> str:
+    """Delegate to chains._friendly_error for consistent messaging."""
+    from backend.chains import _friendly_error as _fe
+    return _fe(e)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # NODE 1: RAG Context — runs first, extracts facts from the user's message
 # ─────────────────────────────────────────────────────────────────────────────
@@ -139,10 +145,10 @@ def _run_specialist(
     except Exception as e:
         print(f"[{agent_name}] Error: {e}")
         return {
-            "response": f"I encountered an issue generating a response. Please try again.",
-            "agent": agent_name,
+            "response":   _friendly_error(e),
+            "agent":      agent_name,
             "tools_used": [],
-            "error": str(e)
+            "error":      str(e)
         }
 
 

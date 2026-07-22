@@ -15,6 +15,31 @@ from backend.memory.rag_pipeline import build_rag_context, extract_and_store_fac
 
 
 # ============================================================================
+# FRIENDLY ERROR MESSAGES
+# ============================================================================
+
+def _friendly_error(e: Exception) -> str:
+    """
+    Convert a raw exception into a short, user-friendly message.
+    Never expose raw API payloads, stack traces, or technical details.
+    """
+    msg = str(e).lower()
+    if "resource_exhausted" in msg or "quota" in msg or "429" in msg:
+        return (
+            "I'm getting a lot of requests right now and hit a rate limit. "
+            "Please wait a few seconds and try again."
+        )
+    if "api_key" in msg or "unauthenticated" in msg or "permission" in msg or "403" in msg:
+        return "There's a configuration issue on my end. Please contact support."
+    if "timeout" in msg or "deadline" in msg or "timed out" in msg:
+        return "That request took too long to process. Please try a shorter question."
+    if "connection" in msg or "network" in msg or "unreachable" in msg:
+        return "I lost connection to my AI models. Please try again in a moment."
+    return "Something went wrong on my end. Please try again."
+
+
+
+# ============================================================================
 # SUPERVISOR ROUTING CHAIN (No tools)
 # ============================================================================
 
@@ -201,11 +226,11 @@ def build_tool_agent_chain(agent_name: str, temperature: float = 0.5, user_id: s
             except Exception as e:
                 print(f"[Tool Agent Error] {agent_name}: {str(e)}")
                 return {
-                    "agent":          agent_name,
-                    "raw_response":   f"I encountered an issue processing your request: {str(e)}",
+                    "agent":               agent_name,
+                    "raw_response":        _friendly_error(e),
                     "structured_response": None,
-                    "tools_used":     [],
-                    "error":          str(e),
+                    "tools_used":          [],
+                    "error":               str(e),
                 }
 
         return run
