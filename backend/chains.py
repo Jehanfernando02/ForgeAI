@@ -142,10 +142,13 @@ def build_tool_agent_chain(agent_name: str, temperature: float = 0.5, user_id: s
     try:
         # create_react_agent from langgraph.prebuilt compiles a full
         # StateGraph with tool node internally. We invoke it directly.
+        # NOTE: langgraph-prebuilt 1.0.x requires prompt to be a
+        # SystemMessage object, not a raw string — raw strings cause
+        # an internal .strip() call on a list → AttributeError.
         agent = create_react_agent(
             model=llm,
             tools=tools,
-            prompt=full_system_prompt,
+            prompt=SystemMessage(content=full_system_prompt),
         )
 
         def run(inputs: dict) -> dict:
