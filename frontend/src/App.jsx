@@ -10,6 +10,11 @@ import {
 } from 'lucide-react'
 import './App.css'
 
+// ─── API base URL ────────────────────────────────────────────────────────────
+// In production (Vercel), VITE_API_BASE_URL = https://forgeai-d0gl.onrender.com
+// In local dev, it is empty — Vite's proxy forwards /api → localhost:5001
+const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+
 // ─── Agent registry ─────────────────────────────────────────────────────────
 const AGENTS = {
   workout_planner:    { label: 'Workout Planner',    short: 'Workout',     icon: Dumbbell,    hue: '24'   },
@@ -312,7 +317,7 @@ export default function App() {
 
   // ── Init session ───────────────────────────────────────────────────────────
   useEffect(() => {
-    axios.post('/api/chat/start')
+    axios.post(`${API_BASE}/api/chat/start`)
       .then(res => {
         setSessionId(res.data.session_id)
         setConnected(true)
@@ -358,7 +363,7 @@ export default function App() {
     setFeed(prev => [{ agent: 'supervisor', detail: 'Analysing request…', status: 'active', time: ts() }, ...prev])
 
     try {
-      const res = await axios.post('/api/chat/send', { session_id: sessionId, message: msg })
+      const res = await axios.post(`${API_BASE}/api/chat/send`, { session_id: sessionId, message: msg })
       const { response, agent_used, agents_used = [], tools_used = [], recovery_flag, routes = [] } = res.data
 
       // Update feed

@@ -16,6 +16,9 @@ __pycache__/
 
 # Environment
 .env
+# Allow production env files (contain only public URLs, no secrets)
+!.env.production
+!frontend/.env.production
 
 # ChromaDB and LangSmith
 chroma_db/
