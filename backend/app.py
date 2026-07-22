@@ -16,9 +16,14 @@ def create_app():
     CORS(app, resources={
         r"/api/*": {
             "origins": [
+                # Local development
                 "http://localhost:3000",
                 "http://localhost:5173",
                 "http://localhost:4173",
+                # Vercel production
+                "https://forge-ai-jet.vercel.app",
+                # Vercel preview deployments
+                "https://forge-ai-jet-jehanfernando02.vercel.app",
             ],
             "methods": ["GET", "POST", "OPTIONS"],
             "allow_headers": ["Content-Type"],
